@@ -13,6 +13,8 @@ _LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _ITALIC_RE = re.compile(r"(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)")
 _INLINE_CODE_RE = re.compile(r"`([^`]+)`")
+_ANSWER_WRAPPER_LINES = {"<answer>", "</answer>"}
+_MATH_BLOCK_DELIMITERS = {"$$": "$$", r"\[": r"\]"}
 
 
 def render_markdown(text: str) -> str:
@@ -22,6 +24,8 @@ def render_markdown(text: str) -> str:
     list_mode: str | None = None
     list_items: list[str] = []
     code_lines: list[str] = []
+    math_lines: list[str] = []
+    math_block_end: str | None = None
     in_code_block = False
 
     def flush_paragraph() -> None:
@@ -58,9 +62,28 @@ def render_markdown(text: str) -> str:
         code_lines = []
         in_code_block = False
 
+    def flush_math_block() -> None:
+        nonlocal math_lines, math_block_end
+        if not math_lines:
+            math_block_end = None
+            return
+        math_html = html.escape("\n".join(math_lines))
+        parts.append(f'<div class="math-block">{math_html}</div>')
+        math_lines = []
+        math_block_end = None
+
     for raw_line in text.splitlines():
         line = raw_line.rstrip("\n")
         stripped = line.strip()
+
+        if stripped in _ANSWER_WRAPPER_LINES:
+            continue
+
+        if math_block_end is not None:
+            math_lines.append(line)
+            if stripped == math_block_end:
+                flush_math_block()
+            continue
 
         if stripped.startswith("```"):
             flush_paragraph()
@@ -75,6 +98,23 @@ def render_markdown(text: str) -> str:
 
         if in_code_block:
             code_lines.append(line)
+            continue
+
+        if stripped in _MATH_BLOCK_DELIMITERS:
+            flush_paragraph()
+            flush_quote()
+            flush_list()
+            math_block_end = _MATH_BLOCK_DELIMITERS[stripped]
+            math_lines = [line]
+            continue
+
+        if (stripped.startswith("$$") and stripped.endswith("$$") and len(stripped) > 4) or (
+            stripped.startswith(r"\[") and stripped.endswith(r"\]") and len(stripped) > 4
+        ):
+            flush_paragraph()
+            flush_quote()
+            flush_list()
+            parts.append(f'<div class="math-block">{html.escape(stripped)}</div>')
             continue
 
         if not stripped:
@@ -112,7 +152,11 @@ def render_markdown(text: str) -> str:
         if bullet_match or ordered_match:
             flush_paragraph()
             mode = "ol" if ordered_match else "ul"
-            item_text = (ordered_match or bullet_match).group(1).strip()
+            if ordered_match is not None:
+                item_text = ordered_match.group(1).strip()
+            else:
+                assert bullet_match is not None
+                item_text = bullet_match.group(1).strip()
             if list_mode != mode:
                 flush_list()
                 list_mode = mode
@@ -128,6 +172,8 @@ def render_markdown(text: str) -> str:
     flush_list()
     if in_code_block:
         flush_code_block()
+    if math_block_end is not None:
+        flush_math_block()
 
     return "\n".join(parts)
 

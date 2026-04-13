@@ -709,7 +709,7 @@ class PaperReaderAppTests(unittest.TestCase):
         result_path = self.app.library.prompt_result_path_for("paper.pdf", prompt.slug)
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text(
-            "# 标题\n\n## 小节\n\n- 列表项\n\n包含 **加粗** 和 `code`。\n\n<script>alert('x')</script>\n",
+            "# 标题\n\n## 小节\n\n- 列表项\n\n包含 **加粗**、`code` 和 $E=mc^2$。\n\n<script>alert('x')</script>\n",
             encoding="utf-8",
         )
 
@@ -722,6 +722,8 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn("<h2>小节</h2>", html)
         self.assertIn("<strong>加粗</strong>", html)
         self.assertIn("<code>code</code>", html)
+        self.assertIn("$E=mc^2$", html)
+        self.assertIn("vendor/mathjax/tex-svg.js", html)
         self.assertIn("&lt;script&gt;alert", html)
         self.assertNotIn("<script>alert", html)
 
@@ -864,6 +866,7 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn("assets/style.css", names)
         self.assertIn("assets/offline-reader.css", names)
         self.assertIn("assets/offline-reader.js", names)
+        self.assertIn("assets/vendor/mathjax/tex-svg.js", names)
         self.assertIn("papers/paper.pdf", names)
         self.assertIn("papers/notes.docx", names)
         self.assertIn("prompt-results/paper.pdf/core-zh.md", names)
@@ -873,6 +876,7 @@ class PaperReaderAppTests(unittest.TestCase):
 
         self.assertIn("论文离线阅读包", index_html)
         self.assertIn("offline-manifest", index_html)
+        self.assertIn("assets/vendor/mathjax/tex-svg.js", index_html)
         self.assertIn("Offline PDF", manifest_payload)
         self.assertIn("Offline Notes", manifest_payload)
 
@@ -1107,6 +1111,13 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn("<blockquote><p>引用内容</p></blockquote>", rendered)
         self.assertIn("<hr>", rendered)
         self.assertIn("<ol><li>第一项</li><li>第二项</li></ol>", rendered)
+
+    def test_render_markdown_preserves_math_blocks_and_strips_answer_wrapper(self) -> None:
+        rendered = render_markdown("<answer>\n\n$$\nE = mc^2\n$$\n\n行内公式 $a^2+b^2=c^2$。\n\n</answer>")
+
+        self.assertNotIn("&lt;answer&gt;", rendered)
+        self.assertIn('<div class="math-block">$$\nE = mc^2\n$$</div>', rendered)
+        self.assertIn("<p>行内公式 $a^2+b^2=c^2$。</p>", rendered)
 
 
 if __name__ == "__main__":

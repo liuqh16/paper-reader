@@ -247,6 +247,16 @@
     `;
   }
 
+  function queueMathTypeset(element) {
+    if (!element || !window.MathJax || typeof window.MathJax.typesetPromise !== "function") {
+      return;
+    }
+    if (typeof window.MathJax.typesetClear === "function") {
+      window.MathJax.typesetClear([element]);
+    }
+    window.MathJax.typesetPromise([element]).catch(() => {});
+  }
+
   function promptHtml(paper, tab) {
     const info = (paper.prompt_results || {})[tab.slug] || { exists: false };
     if (!info.exists) {
@@ -341,6 +351,7 @@
         });
       });
     });
+    queueMathTypeset(viewerRoot);
   }
 
   function render() {

@@ -6,6 +6,20 @@
     <title>论文离线阅读包</title>
     <link rel="stylesheet" href="assets/style.css">
     <link rel="stylesheet" href="assets/offline-reader.css">
+    <script>
+      window.MathJax = {
+        tex: {
+          inlineMath: [['$', '$'], ['\\(', '\\)']],
+          displayMath: [['$$', '$$'], ['\\[', '\\]']],
+          processEscapes: true,
+          processEnvironments: true,
+        },
+        options: {
+          skipHtmlTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code'],
+        },
+      };
+    </script>
+    <script defer src="assets/vendor/mathjax/tex-svg.js"></script>
   </head>
   <body class="offline-body">
     <div class="page-shell offline-page-shell">

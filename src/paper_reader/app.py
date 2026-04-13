@@ -1971,6 +1971,10 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             archive.writestr("assets/style.css", (static_root / "style.css").read_bytes())
             archive.writestr("assets/offline-reader.css", (static_root / "offline-reader.css").read_bytes())
             archive.writestr("assets/offline-reader.js", (static_root / "offline-reader.js").read_bytes())
+            archive.writestr(
+                "assets/vendor/mathjax/tex-svg.js",
+                (static_root / "vendor" / "mathjax" / "tex-svg.js").read_bytes(),
+            )
 
             for paper in selected_records:
                 source_path = app.library.resolve_relative_path(paper.rel_path)  # type: ignore[attr-defined]

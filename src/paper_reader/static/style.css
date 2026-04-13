@@ -574,6 +574,21 @@ main {
   max-width: 100%;
   height: auto;
 }
+.markdown-render .math-block,
+.markdown-render mjx-container {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.markdown-render .math-block {
+  margin: 0 0 1em;
+}
+.markdown-render mjx-container[display="true"] {
+  padding: 0.15em 0;
+}
+.markdown-render mjx-container svg {
+  max-width: 100%;
+}
 .markdown-render table {
   display: block;
   width: 100%;
