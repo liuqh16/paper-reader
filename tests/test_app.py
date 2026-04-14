@@ -631,6 +631,7 @@ class PaperReaderAppTests(unittest.TestCase):
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
+        self.assertIn("把屏幕优先留给论文分析、推荐和讨论。", html)
         self.assertIn("workspace-orbit-dock", html)
         self.assertIn('role="toolbar"', html)
         self.assertIn("pane-restore-rail", html)
