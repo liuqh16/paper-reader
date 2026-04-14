@@ -624,6 +624,51 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn("这个 Prompt 还没有应用到当前论文上", html)
         self.assertIn("实验摘要", html)
 
+    def test_index_renders_compact_workspace_controls(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Compact Workspace")
+
+        response = self.client.get("/?paper=paper.pdf&tab=source")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("workspace-orbit-dock", html)
+        self.assertIn('role="toolbar"', html)
+        self.assertIn("pane-restore-rail", html)
+        self.assertIn('aria-controls="settings-drawer"', html)
+        self.assertIn('role="dialog"', html)
+        self.assertIn('aria-labelledby="settings-drawer-title"', html)
+        self.assertIn('tabindex="-1"', html)
+        self.assertIn('aria-hidden="true"', html)
+        self.assertIn('aria-label="折叠阅读区"', html)
+        self.assertIn("settings-user-card", html)
+        self.assertIn("拖动右下角 logo 到顺手的位置", html)
+        self.assertIn("推荐优先展示", html)
+
+    def test_workspace_styles_support_dragging_and_mobile_collapses(self) -> None:
+        css = (Path(self.app.static_folder) / "style.css").read_text(encoding="utf-8")
+
+        self.assertIn("touch-action: none;", css)
+        self.assertIn(
+            ".workspace-shell.center-collapsed .viewer-head-flat,\n.workspace-shell.center-collapsed .viewer-tabs,\n.workspace-shell.center-collapsed [data-center-stage] {\n  display: none;",
+            css,
+        )
+        self.assertIn(
+            ".workspace-shell.left-collapsed .pane-left,\n  .workspace-shell.center-collapsed .pane-center,\n  .workspace-shell.right-collapsed .pane-right {\n    display: none;",
+            css,
+        )
+        self.assertIn(
+            "body.settings-open .settings-orb:not(.dragging) {\n  transform: rotate(8deg) scale(0.96);\n  z-index: 54;\n}",
+            css,
+        )
+
+    def test_workspace_template_hides_collapsed_regions_from_keyboard_navigation(self) -> None:
+        template = (Path(self.app.template_folder) / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn('pane.toggleAttribute("inert", collapsed);', template)
+        self.assertIn('pane.setAttribute("aria-hidden", collapsed ? "true" : "false");', template)
+        self.assertIn('settingsDrawer.toggleAttribute("inert", !layoutState.settingsOpen);', template)
+        self.assertIn('settingsDrawer.setAttribute("aria-hidden", layoutState.settingsOpen ? "false" : "true");', template)
+
     def test_sidebar_groups_by_year_month_and_done_toggle(self) -> None:
         self.make_pdf(self.library / "2025-paper.pdf", "2025 Paper")
         self.make_docx(self.library / "2024-notes.docx", "2024 Notes", "submitted on 11 Dec 2024")
@@ -1294,6 +1339,12 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertNotIn("&lt;answer&gt;", rendered)
         self.assertIn('<div class="math-block">$$\nE = mc^2\n$$</div>', rendered)
         self.assertIn("<p>行内公式 $a^2+b^2=c^2$。</p>", rendered)
+
+    def test_render_markdown_keeps_html_like_inline_code_readable(self) -> None:
+        rendered = render_markdown("答案放在 `<answer></answer>` 里。")
+
+        self.assertIn("<p>答案放在 <code>&lt;answer&gt;&lt;/answer&gt;</code> 里。</p>", rendered)
+        self.assertNotIn("&amp;lt;answer&amp;gt;", rendered)
 
 
 if __name__ == "__main__":

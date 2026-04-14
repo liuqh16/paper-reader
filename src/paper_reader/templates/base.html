@@ -28,17 +28,9 @@
           <div>
             <p class="eyebrow">Paper Reader</p>
             <h1><a href="{{ url_for('index') }}">论文阅读器</a></h1>
-            <p class="hero-copy">从个人阅读器升级到团队共享阅读器：上传、检索、推荐、评论，并复用共享 Prompt 结果。</p>
+            <p class="hero-copy">团队共享的论文工作台：左侧检索导航，中间快速阅读，右侧沉淀推荐与讨论。</p>
           </div>
         </div>
-        {% if current_user %}
-          <div class="hero-user-box">
-            <span class="meta-label">当前用户</span>
-            <strong>{{ current_user.display_name }}</strong>
-            <small>{{ current_user.username }} · {{ current_user.role }}</small>
-            <a class="button-link secondary" href="{{ url_for('logout') }}">退出登录</a>
-          </div>
-        {% endif %}
       </header>
 
       {% with messages = get_flashed_messages(with_categories=true) %}

@@ -3,13 +3,22 @@
 {% block content %}
 <section class="workspace-shell tri-workspace" data-layout-root>
   <aside class="sidebar-pane card layout-pane pane-left" data-pane="left">
-    <div class="pane-top">
+    <div class="pane-top pane-top-compact">
       <div>
         <p class="eyebrow">Navigate</p>
         <h2><span id="paper-count">{{ papers|length }}</span> 篇论文</h2>
-        <p class="sidebar-copy">左侧用于导航和检索，中间区域优先用于阅读论文和核心解读。</p>
+        <p class="sidebar-copy">导航、检索与分组浏览。</p>
       </div>
-      <button type="button" class="pane-toggle" data-toggle-pane="left" title="折叠左侧导航">折叠</button>
+      <button type="button" class="icon-button pane-toggle" data-pane-button="left" data-toggle-pane="left" title="折叠左栏" aria-label="折叠左栏">
+        <span class="icon-shell" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
+            <path d="M9.5 5v14"></path>
+            <path d="M15 8.5L11.5 12 15 15.5"></path>
+          </svg>
+        </span>
+        <span class="sr-only">切换左栏</span>
+      </button>
     </div>
 
     <form class="nav-filter-form" action="{{ url_for('index') }}" method="get">
@@ -113,54 +122,43 @@
   <div class="pane-resizer pane-resizer-left" data-resizer="left" aria-hidden="true"></div>
 
   <section class="viewer-pane card layout-pane pane-center" data-pane="center">
-    <div class="viewer-toolbar">
+    <div class="viewer-toolbar viewer-toolbar-slim">
       <div class="viewer-toolbar-copy">
-        <p class="eyebrow">Reader</p>
         {% if selected_paper %}
+          <p class="eyebrow">Reader</p>
           <h2>{{ selected_paper.display_title }}</h2>
-          <p class="viewer-subtitle">{{ selected_paper.file_name }}</p>
+          <p class="viewer-subtitle">{{ selected_paper.file_name }} · {{ format_bytes(selected_paper.file_size) }}</p>
         {% else %}
+          <p class="eyebrow">Reader</p>
           <h2>Team Reader</h2>
-          <p class="viewer-subtitle">左侧导航选论文，中间沉浸式阅读，右侧区域为未来 Chatbot 预留。</p>
+          <p class="viewer-subtitle">选中一篇论文后，在这里快速阅读正文或 Prompt 结果。</p>
         {% endif %}
       </div>
-      <div class="viewer-toolbar-actions">
-        <button type="button" class="secondary ghost-toggle" data-toggle-pane="left">左栏</button>
-        <button type="button" class="secondary ghost-toggle" data-toggle-pane="center">中栏</button>
-        <button type="button" class="secondary ghost-toggle" data-toggle-pane="right">右栏</button>
+      <div class="viewer-toolbar-status">
+        {% if selected_paper %}
+          <span class="viewer-status-pill">{{ selected_paper.prompt_result_count }}/{{ active_prompt_count }} Prompt</span>
+        {% else %}
+          <span class="viewer-status-pill">Ready</span>
+        {% endif %}
+        <button type="button" class="icon-button pane-toggle" data-pane-button="center" data-toggle-pane="center" title="折叠阅读区" aria-label="折叠阅读区">
+          <span class="icon-shell" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
+              <path d="M8 12h8"></path>
+            </svg>
+          </span>
+          <span class="sr-only">切换阅读区</span>
+        </button>
       </div>
     </div>
 
     {% if selected_paper %}
-      <div class="viewer-head viewer-head-compact">
+      <div class="viewer-head viewer-head-compact viewer-head-flat">
         <div class="viewer-meta viewer-meta-inline">
           {% if selected_paper.extracted_date %}<span>{{ selected_paper.extracted_date }}</span>{% endif %}
-          <span>{{ format_bytes(selected_paper.file_size) }}</span>
-          <span>{{ selected_paper.prompt_result_count }}/{{ active_prompt_count }} 个 Prompt 已完成</span>
           <span>{{ selected_paper_context.recommendation_count }} 条推荐</span>
           <span>{{ selected_paper_context.like_count }} 个赞</span>
           <span>{{ selected_paper_context.comment_count }} 条评论</span>
-        </div>
-        <div class="viewer-meta-actions">
-          <form action="{{ url_for('like_toggle_route') }}" method="post" class="inline-form">
-            <input type="hidden" name="folder" value="{{ current_folder }}">
-            <input type="hidden" name="q" value="{{ query }}">
-            <input type="hidden" name="sort" value="{{ sort_by }}">
-            <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-            <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-            <input type="hidden" name="tab" value="{{ selected_tab }}">
-            <button type="submit" class="secondary">{% if selected_paper_context.liked_by_current_user %}取消点赞{% else %}点赞{% endif %}</button>
-          </form>
-          <form action="{{ url_for('done_toggle_route') }}" method="post" class="inline-form">
-            <input type="hidden" name="folder" value="{{ current_folder }}">
-            <input type="hidden" name="q" value="{{ query }}">
-            <input type="hidden" name="sort" value="{{ sort_by }}">
-            <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-            <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-            <input type="hidden" name="tab" value="{{ selected_tab }}">
-            <button type="submit" class="secondary">{% if selected_paper.is_done %}恢复为未完成{% else %}标记 DONE{% endif %}</button>
-          </form>
-          <button type="button" class="secondary ghost-toggle" data-toggle-pane="center">最小化阅读区</button>
         </div>
       </div>
 
@@ -327,19 +325,30 @@
   <div class="pane-resizer pane-resizer-right" data-resizer="right" aria-hidden="true"></div>
 
   <aside class="assistant-pane card layout-pane pane-right" data-pane="right">
-    <div class="pane-top">
+    <div class="pane-top pane-top-compact">
       <div>
-        <p class="eyebrow">Assistant Dock</p>
-        <h2>Shared / Private Chat</h2>
-        <p class="sidebar-copy">右侧区域预留给未来 Chatbot。当前先承载团队协作信息与讨论。</p>
+        <p class="eyebrow">Team Rail</p>
+        <h2>推荐与讨论</h2>
+        <p class="sidebar-copy">把最常看的推荐、标签和讨论放在前面。</p>
       </div>
-      <button type="button" class="pane-toggle" data-toggle-pane="right" title="折叠右侧区域">折叠</button>
+      <button type="button" class="icon-button pane-toggle" data-pane-button="right" data-toggle-pane="right" title="折叠右栏" aria-label="折叠右栏">
+        <span class="icon-shell" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
+            <path d="M14.5 5v14"></path>
+            <path d="M9 8.5L12.5 12 9 15.5"></path>
+          </svg>
+        </span>
+        <span class="sr-only">切换右栏</span>
+      </button>
     </div>
 
-    <div class="assistant-placeholder">
+    <div class="assistant-inline-note">
       <img class="assistant-placeholder-logo" src="{{ url_for('static', filename='logo-mark.svg') }}" alt="Paper Reader logo">
-      <strong>Chatbot 区域预留中</strong>
-      <p>这里后续会接入 Shared Chat、Private Chat 和 `@bot`。现在先展示推荐、标签、共享结果与团队讨论。</p>
+      <div>
+        <strong>协作区</strong>
+        <p>推荐优先展示，聊天占位改为轻量说明，不再压住右栏首屏。</p>
+      </div>
     </div>
 
     {% if selected_paper %}
@@ -490,28 +499,147 @@
       </div>
     {% endif %}
   </aside>
+  <button type="button" class="pane-restore-rail pane-restore-left" data-restore-pane="left" data-toggle-pane="left" title="展开左栏" aria-label="展开左栏">
+    <span class="icon-shell" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M15 7L9 12l6 5"></path>
+      </svg>
+    </span>
+  </button>
+  <button type="button" class="pane-restore-rail pane-restore-right" data-restore-pane="right" data-toggle-pane="right" title="展开右栏" aria-label="展开右栏">
+    <span class="icon-shell" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M9 7l6 5-6 5"></path>
+      </svg>
+    </span>
+  </button>
 </section>
 
-<button type="button" id="settings-orb" class="settings-orb" title="打开控制中心" aria-label="打开控制中心">
-  <img src="{{ url_for('static', filename='logo-mark.svg') }}" alt="Paper Reader logo">
+<div class="workspace-orbit-dock" role="toolbar" aria-label="工作区快捷操作">
+  <button type="button" class="icon-button workspace-dock-button" data-pane-button="left" data-toggle-pane="left" title="切换左栏" aria-label="切换左栏">
+    <span class="icon-shell" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
+        <path d="M9.5 5v14"></path>
+      </svg>
+    </span>
+    <span class="sr-only">切换左栏</span>
+  </button>
+  <button type="button" class="icon-button workspace-dock-button" data-pane-button="center" data-toggle-pane="center" title="最小化或展开阅读区" aria-label="最小化或展开阅读区">
+    <span class="icon-shell" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
+        <path d="M8 12h8"></path>
+      </svg>
+    </span>
+    <span class="sr-only">切换中栏</span>
+  </button>
+  <button type="button" class="icon-button workspace-dock-button" data-pane-button="right" data-toggle-pane="right" title="切换右栏" aria-label="切换右栏">
+    <span class="icon-shell" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
+        <path d="M14.5 5v14"></path>
+      </svg>
+    </span>
+    <span class="sr-only">切换右栏</span>
+  </button>
+  {% if selected_paper %}
+    <form action="{{ url_for('like_toggle_route') }}" method="post" class="inline-form workspace-dock-form">
+      <input type="hidden" name="folder" value="{{ current_folder }}">
+      <input type="hidden" name="q" value="{{ query }}">
+      <input type="hidden" name="sort" value="{{ sort_by }}">
+      <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+      <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+      <input type="hidden" name="tab" value="{{ selected_tab }}">
+      <button type="submit" class="icon-button workspace-dock-button {% if selected_paper_context.liked_by_current_user %}is-accent{% endif %}" title="{% if selected_paper_context.liked_by_current_user %}取消点赞{% else %}点赞{% endif %}" aria-label="{% if selected_paper_context.liked_by_current_user %}取消点赞{% else %}点赞{% endif %}">
+        <span class="icon-shell" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20s-7-4.35-7-9.5S8.12 3 12 7c3.88-4 7 0.15 7 3.5S12 20 12 20Z"></path>
+          </svg>
+        </span>
+        <span class="icon-badge">{{ selected_paper_context.like_count }}</span>
+        <span class="sr-only">点赞</span>
+      </button>
+    </form>
+    <form action="{{ url_for('done_toggle_route') }}" method="post" class="inline-form workspace-dock-form">
+      <input type="hidden" name="folder" value="{{ current_folder }}">
+      <input type="hidden" name="q" value="{{ query }}">
+      <input type="hidden" name="sort" value="{{ sort_by }}">
+      <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+      <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+      <input type="hidden" name="tab" value="{{ selected_tab }}">
+      <button type="submit" class="icon-button workspace-dock-button {% if selected_paper.is_done %}is-active{% endif %}" title="{% if selected_paper.is_done %}恢复为未完成{% else %}标记 DONE{% endif %}" aria-label="{% if selected_paper.is_done %}恢复为未完成{% else %}标记 DONE{% endif %}">
+        <span class="icon-shell" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5.5 12.5l4 4L18.5 7.5"></path>
+          </svg>
+        </span>
+        <span class="sr-only">标记 DONE</span>
+      </button>
+    </form>
+  {% endif %}
+</div>
+
+<button type="button" id="settings-orb" class="settings-orb" title="拖动或打开控制中心" aria-label="拖动或打开控制中心" aria-controls="settings-drawer" aria-expanded="false">
+  <span class="settings-orb-core">
+    <img src="{{ url_for('static', filename='logo-mark.svg') }}" alt="Paper Reader logo">
+  </span>
+  {% if current_user %}
+    <span class="settings-orb-badge">{{ current_user.display_name[:1]|upper }}</span>
+  {% endif %}
 </button>
 
-<section class="bottom-tools card settings-drawer" id="settings-drawer" data-settings-drawer>
+<section class="bottom-tools card settings-drawer" id="settings-drawer" data-settings-drawer role="dialog" aria-modal="false" aria-labelledby="settings-drawer-title" aria-hidden="true" tabindex="-1" inert>
   <div class="tools-head settings-head">
     <div>
       <p class="eyebrow">Control Center</p>
-      <h2>管理与导入</h2>
-      <p class="sidebar-copy">点击右上角圆形 logo 展开这个控制中心。上传、导入、Prompt 管理和团队设置都收纳在这里。</p>
+      <h2 id="settings-drawer-title">管理与导入</h2>
+      <p class="sidebar-copy">拖动右下角 logo 到顺手的位置，再点开这个控制中心处理上传、导入和团队设置。</p>
     </div>
     <div class="tools-head-actions">
       <button type="button" class="button-link secondary" data-close-settings>关闭面板</button>
       <a class="button-link secondary" href="{{ url_for('sources_index') }}" target="_blank" rel="noreferrer">打开 Sources 页面</a>
     </div>
   </div>
-  <div class="drawer-quick-actions">
-    <button type="button" class="secondary ghost-toggle" data-toggle-pane="left">切换左栏</button>
-    <button type="button" class="secondary ghost-toggle" data-toggle-pane="center">切换中栏</button>
-    <button type="button" class="secondary ghost-toggle" data-toggle-pane="right">切换右栏</button>
+  {% if current_user %}
+    <div class="settings-user-card">
+      <div class="settings-user-avatar">{{ current_user.display_name[:1]|upper }}</div>
+      <div class="settings-user-copy">
+        <span class="meta-label">当前用户</span>
+        <strong>{{ current_user.display_name }}</strong>
+        <small>{{ current_user.username }} · {{ current_user.role }}</small>
+      </div>
+      <a class="button-link secondary" href="{{ url_for('logout') }}">退出登录</a>
+    </div>
+  {% endif %}
+  <div class="drawer-quick-actions drawer-quick-actions-icons">
+    <button type="button" class="icon-button" data-pane-button="left" data-toggle-pane="left" title="切换左栏" aria-label="切换左栏">
+      <span class="icon-shell" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
+          <path d="M9.5 5v14"></path>
+        </svg>
+      </span>
+      <span>左栏</span>
+    </button>
+    <button type="button" class="icon-button" data-pane-button="center" data-toggle-pane="center" title="切换中栏" aria-label="切换中栏">
+      <span class="icon-shell" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
+          <path d="M8 12h8"></path>
+        </svg>
+      </span>
+      <span>中栏</span>
+    </button>
+    <button type="button" class="icon-button" data-pane-button="right" data-toggle-pane="right" title="切换右栏" aria-label="切换右栏">
+      <span class="icon-shell" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
+          <path d="M14.5 5v14"></path>
+        </svg>
+      </span>
+      <span>右栏</span>
+    </button>
   </div>
 
   <details class="tool-panel">
@@ -834,17 +962,27 @@
       const settingsDrawer = document.querySelector("[data-settings-drawer]");
       const closeSettingsButton = settingsDrawer ? settingsDrawer.querySelector("[data-close-settings]") : null;
       const paneToggleButtons = Array.from(document.querySelectorAll("[data-toggle-pane]"));
+      const paneStateButtons = Array.from(document.querySelectorAll("[data-pane-button]"));
       const paneResizers = Array.from(document.querySelectorAll("[data-resizer]"));
-      const layoutStateKey = "paper-reader-layout-v3";
+      const paneRegions = {
+        left: document.querySelector('[data-pane="left"]'),
+        center: document.querySelector('[data-pane="center"]'),
+        right: document.querySelector('[data-pane="right"]'),
+      };
+      const layoutStateKey = "paper-reader-layout-v4";
       const defaultLayoutState = {
-        leftWidth: 280,
-        rightWidth: 360,
+        leftWidth: 264,
+        rightWidth: 388,
         leftCollapsed: false,
         centerCollapsed: false,
         rightCollapsed: false,
         settingsOpen: false,
+        orbX: null,
+        orbY: null,
+        orbMoved: false,
       };
       let layoutState = loadLayoutState();
+      let settingsReturnFocus = null;
 
       function loadLayoutState() {
         try {
@@ -866,6 +1004,57 @@
         return Math.max(min, Math.min(max, value));
       }
 
+      function isPaneCollapsed(pane) {
+        if (pane === "left") return layoutState.leftCollapsed;
+        if (pane === "center") return layoutState.centerCollapsed;
+        if (pane === "right") return layoutState.rightCollapsed;
+        return false;
+      }
+
+      function syncPaneButtons() {
+        paneStateButtons.forEach((button) => {
+          const pane = button.dataset.paneButton || button.dataset.togglePane || "left";
+          const collapsed = isPaneCollapsed(pane);
+          const noun = pane === "left" ? "左栏" : pane === "center" ? "阅读区" : "右栏";
+          button.classList.toggle("is-collapsed", collapsed);
+          button.setAttribute("aria-pressed", collapsed ? "false" : "true");
+          button.setAttribute("title", `${collapsed ? "展开" : "折叠"}${noun}`);
+          button.setAttribute("aria-label", `${collapsed ? "展开" : "折叠"}${noun}`);
+        });
+      }
+
+      function syncPaneRegions() {
+        ["left", "right"].forEach((paneName) => {
+          const pane = paneRegions[paneName];
+          if (!pane) return;
+          const collapsed = isPaneCollapsed(paneName);
+          pane.toggleAttribute("inert", collapsed);
+          pane.setAttribute("aria-hidden", collapsed ? "true" : "false");
+        });
+      }
+
+      function applyOrbPosition() {
+        if (!settingsOrb) return;
+        if (!layoutState.orbMoved) {
+          settingsOrb.style.left = "";
+          settingsOrb.style.top = "";
+          settingsOrb.style.right = "";
+          settingsOrb.style.bottom = "";
+          settingsOrb.classList.remove("is-custom-position");
+          return;
+        }
+        const margin = window.innerWidth <= 820 ? 10 : 16;
+        const width = settingsOrb.offsetWidth || 62;
+        const height = settingsOrb.offsetHeight || 62;
+        layoutState.orbX = clamp(layoutState.orbX ?? (window.innerWidth - width - margin), margin, window.innerWidth - width - margin);
+        layoutState.orbY = clamp(layoutState.orbY ?? margin, margin, window.innerHeight - height - margin);
+        settingsOrb.style.left = `${layoutState.orbX}px`;
+        settingsOrb.style.top = `${layoutState.orbY}px`;
+        settingsOrb.style.right = "auto";
+        settingsOrb.style.bottom = "auto";
+        settingsOrb.classList.add("is-custom-position");
+      }
+
       function applyLayoutState() {
         if (!layoutRoot) return;
         layoutRoot.style.setProperty("--left-pane-width", layoutState.leftCollapsed ? "0px" : `${layoutState.leftWidth}px`);
@@ -882,6 +1071,13 @@
         if (settingsOrb) {
           settingsOrb.setAttribute("aria-expanded", layoutState.settingsOpen ? "true" : "false");
         }
+        if (settingsDrawer) {
+          settingsDrawer.toggleAttribute("inert", !layoutState.settingsOpen);
+          settingsDrawer.setAttribute("aria-hidden", layoutState.settingsOpen ? "false" : "true");
+        }
+        syncPaneRegions();
+        syncPaneButtons();
+        applyOrbPosition();
       }
 
       function updatePaneState(pane, nextValue) {
@@ -899,8 +1095,25 @@
       }
 
       function setSettingsOpen(nextValue) {
+        if (nextValue === layoutState.settingsOpen) return;
+        if (nextValue) {
+          settingsReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        }
         layoutState.settingsOpen = nextValue;
         applyLayoutState();
+        if (nextValue) {
+          window.requestAnimationFrame(() => {
+            if (closeSettingsButton) {
+              closeSettingsButton.focus();
+            } else if (settingsDrawer) {
+              settingsDrawer.focus();
+            }
+          });
+        } else if (settingsReturnFocus && document.contains(settingsReturnFocus)) {
+          settingsReturnFocus.focus();
+        } else if (settingsOrb) {
+          settingsOrb.focus();
+        }
         persistLayoutState();
       }
 
@@ -911,8 +1124,67 @@
       });
 
       if (settingsOrb) {
-        settingsOrb.addEventListener("click", () => {
+        let orbDragState = null;
+        let suppressOrbClick = false;
+
+        function stopOrbDrag(event) {
+          if (!orbDragState) return;
+          if (event && settingsOrb.hasPointerCapture(orbDragState.pointerId)) {
+            settingsOrb.releasePointerCapture(orbDragState.pointerId);
+          }
+          settingsOrb.classList.remove("dragging");
+          if (orbDragState.dragged) {
+            suppressOrbClick = true;
+            window.setTimeout(() => {
+              suppressOrbClick = false;
+            }, 0);
+            persistLayoutState();
+          }
+          orbDragState = null;
+        }
+
+        settingsOrb.addEventListener("pointerdown", (event) => {
+          if (event.button !== 0) return;
+          const rect = settingsOrb.getBoundingClientRect();
+          orbDragState = {
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            originX: rect.left,
+            originY: rect.top,
+            dragged: false,
+          };
+          settingsOrb.setPointerCapture(event.pointerId);
+        });
+
+        settingsOrb.addEventListener("pointermove", (event) => {
+          if (!orbDragState || event.pointerId !== orbDragState.pointerId) return;
+          const deltaX = event.clientX - orbDragState.startX;
+          const deltaY = event.clientY - orbDragState.startY;
+          if (!orbDragState.dragged && Math.hypot(deltaX, deltaY) < 6) return;
+          orbDragState.dragged = true;
+          layoutState.orbMoved = true;
+          layoutState.orbX = orbDragState.originX + deltaX;
+          layoutState.orbY = orbDragState.originY + deltaY;
+          settingsOrb.classList.add("dragging");
+          applyLayoutState();
+        });
+
+        settingsOrb.addEventListener("pointerup", stopOrbDrag);
+        settingsOrb.addEventListener("pointercancel", stopOrbDrag);
+        settingsOrb.addEventListener("click", (event) => {
+          if (suppressOrbClick) {
+            event.preventDefault();
+            return;
+          }
           setSettingsOpen(!layoutState.settingsOpen);
+        });
+        settingsOrb.addEventListener("dblclick", () => {
+          layoutState.orbMoved = false;
+          layoutState.orbX = null;
+          layoutState.orbY = null;
+          applyLayoutState();
+          persistLayoutState();
         });
       }
       if (closeSettingsButton) {
@@ -929,6 +1201,11 @@
         if (!(target instanceof Node)) return;
         if (settingsDrawer.contains(target) || settingsOrb.contains(target)) return;
         setSettingsOpen(false);
+      });
+      window.addEventListener("resize", () => {
+        if (!settingsOrb || !layoutState.orbMoved) return;
+        applyLayoutState();
+        persistLayoutState();
       });
 
       function bindPaneResizer(handle) {
