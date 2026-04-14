@@ -1775,11 +1775,11 @@ body.settings-open .settings-orb:not(.dragging) {
 }
 .settings-drawer {
   position: fixed;
-  top: 92px;
+  top: 84px;
   right: 24px;
-  width: min(460px, calc(100vw - 36px));
-  max-height: calc(100dvh - 118px);
-  padding: 16px;
+  width: min(560px, calc(100vw - 36px));
+  max-height: calc(100dvh - 104px);
+  padding: 18px;
   overflow-y: auto;
   z-index: 55;
   opacity: 0;
@@ -1794,10 +1794,10 @@ body.settings-open .settings-drawer {
 }
 .settings-head {
   position: sticky;
-  top: -16px;
+  top: -18px;
   z-index: 2;
-  margin: -16px -16px 12px;
-  padding: 16px;
+  margin: -18px -18px 12px;
+  padding: 18px;
   background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(255,255,255,0.92));
   border-bottom: 1px solid rgba(84, 60, 35, 0.1);
 }

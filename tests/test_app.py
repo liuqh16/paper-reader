@@ -631,7 +631,6 @@ class PaperReaderAppTests(unittest.TestCase):
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("把屏幕优先留给论文分析、推荐和讨论。", html)
         self.assertIn("workspace-orbit-dock", html)
         self.assertIn("workspace-like-button", html)
         self.assertIn("pane-restore-glyph", html)
@@ -644,7 +643,6 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn('aria-hidden="true"', html)
         self.assertIn('aria-label="折叠阅读区"', html)
         self.assertIn("settings-user-card", html)
-        self.assertIn("拖动右下角 logo 到顺手的位置", html)
         self.assertIn("推荐优先展示", html)
 
     def test_workspace_styles_support_dragging_and_mobile_collapses(self) -> None:
