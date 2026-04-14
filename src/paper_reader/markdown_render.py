@@ -188,7 +188,7 @@ def render_inline(text: str) -> str:
 
 
 def _render_inline_code(match: re.Match[str]) -> str:
-    return f"<code>{html.escape(match.group(1))}</code>"
+    return f"<code>{match.group(1)}</code>"
 
 
 def _render_link(match: re.Match[str]) -> str:
