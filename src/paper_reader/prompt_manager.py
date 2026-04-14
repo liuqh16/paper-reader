@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -23,34 +24,82 @@ class PromptDefinition:
     auto_run: bool
     created_at: str
     updated_at: str
+    prompt_id: int | None = None
+    version_id: int | None = None
+    version: int = 1
+    admin_only: bool = True
 
 
 class PromptStore:
-    def __init__(self, library_root: Path):
+    def __init__(self, library_root: Path, db_path: Path):
         self.library_root = library_root.resolve()
         self.store_path = self.library_root / PROMPT_STORE_NAME
+        self.db_path = db_path.resolve()
+        self._ensure_schema()
+        self._migrate_legacy_prompts_if_needed()
 
-    def list_prompts(self) -> list[PromptDefinition]:
-        payload = self._load_payload()
-        prompts: list[PromptDefinition] = []
-        for item in payload.get("prompts", []):
-            prompt = self._coerce_prompt(item)
-            if prompt is not None:
-                prompts.append(prompt)
-        if prompts:
-            return sorted(
-                prompts,
-                key=lambda prompt: (
-                    prompt.slug != DEFAULT_PROMPT_SLUG,
-                    not prompt.enabled,
-                    prompt.name.lower(),
-                    prompt.created_at,
-                ),
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
+    def _ensure_schema(self) -> None:
+        with self._connect() as conn:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS prompts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    slug TEXT NOT NULL UNIQUE,
+                    name TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    auto_run INTEGER NOT NULL DEFAULT 1,
+                    admin_only INTEGER NOT NULL DEFAULT 1,
+                    is_deleted INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS prompt_versions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    prompt_id INTEGER NOT NULL,
+                    version INTEGER NOT NULL,
+                    user_prompt TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    created_by_user_id INTEGER,
+                    created_at TEXT NOT NULL,
+                    UNIQUE (prompt_id, version),
+                    FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE
+                );
+                """
             )
 
+    def _migrate_legacy_prompts_if_needed(self) -> None:
+        with self._connect() as conn:
+            count = int(conn.execute("SELECT COUNT(*) FROM prompts WHERE is_deleted = 0").fetchone()[0])
+        if count > 0:
+            return
+
+        payload = self._load_legacy_payload()
+        prompts = payload.get("prompts", []) if isinstance(payload.get("prompts"), list) else []
+        migrated_any = False
+        for item in prompts:
+            prompt = self._coerce_legacy_prompt(item)
+            if prompt is None:
+                continue
+            self._insert_prompt(prompt, created_by_user_id=None)
+            migrated_any = True
+
+        if not migrated_any:
+            self._insert_prompt(self.default_prompt(), created_by_user_id=None)
+
+    def list_prompts(self) -> list[PromptDefinition]:
+        rows = self._list_prompt_rows()
+        if rows:
+            return rows
         default_prompt = self.default_prompt()
-        self._write_payload({"prompts": [asdict(default_prompt)]})
-        return [default_prompt]
+        self._insert_prompt(default_prompt, created_by_user_id=None)
+        return self._list_prompt_rows()
 
     def default_prompt(self) -> PromptDefinition:
         now = datetime.utcnow().isoformat(timespec="seconds")
@@ -63,6 +112,7 @@ class PromptStore:
             auto_run=True,
             created_at=now,
             updated_at=now,
+            admin_only=True,
         )
 
     def get_prompt(self, slug: str) -> PromptDefinition | None:
@@ -87,6 +137,8 @@ class PromptStore:
         model: str,
         enabled: bool,
         auto_run: bool,
+        admin_only: bool = True,
+        created_by_user_id: int | None = None,
     ) -> PromptDefinition:
         name = name.strip()
         requested_slug = slug.strip()
@@ -97,78 +149,166 @@ class PromptStore:
         if not user_prompt:
             raise ValueError("Prompt 内容不能为空。")
 
-        payload = self._load_payload()
-        prompts = payload.get("prompts", [])
-        if not prompts:
-            prompts = [asdict(self.default_prompt())]
-        used_slugs = {str(item.get("slug", "")).strip() for item in prompts if item.get("slug")}
-        if existing_slug:
-            used_slugs.discard(existing_slug)
-            resolved_slug = existing_slug.strip()
-        else:
-            resolved_slug = self._choose_slug(name=name, requested_slug=requested_slug, used_slugs=used_slugs)
-
         now = datetime.utcnow().isoformat(timespec="seconds")
-        updated_prompt: PromptDefinition | None = None
-        seen = False
-        next_prompts: list[dict[str, Any]] = []
+        with self._connect() as conn:
+            active_rows = conn.execute(
+                "SELECT slug FROM prompts WHERE is_deleted = 0"
+            ).fetchall()
+            used_slugs = {str(row["slug"]) for row in active_rows}
+            if existing_slug:
+                used_slugs.discard(existing_slug)
+                resolved_slug = existing_slug.strip()
+            else:
+                resolved_slug = self._choose_slug(name=name, requested_slug=requested_slug, used_slugs=used_slugs)
 
-        for item in prompts:
-            item_slug = item.get("slug")
-            if existing_slug and item_slug == existing_slug:
-                created_at = item.get("created_at") or now
-                updated_prompt = PromptDefinition(
-                    slug=existing_slug,
-                    name=name,
-                    user_prompt=user_prompt,
-                    model=model,
-                    enabled=enabled,
-                    auto_run=auto_run,
-                    created_at=created_at,
-                    updated_at=now,
+            if existing_slug:
+                prompt_row = conn.execute(
+                    "SELECT id, created_at FROM prompts WHERE slug = ? AND is_deleted = 0",
+                    (existing_slug,),
+                ).fetchone()
+                if prompt_row is None:
+                    raise FileNotFoundError(existing_slug)
+                prompt_id = int(prompt_row["id"])
+                version_row = conn.execute(
+                    "SELECT COALESCE(MAX(version), 0) AS version FROM prompt_versions WHERE prompt_id = ?",
+                    (prompt_id,),
+                ).fetchone()
+                next_version = int(version_row["version"]) + 1
+                conn.execute(
+                    """
+                    UPDATE prompts
+                    SET name = ?, enabled = ?, auto_run = ?, admin_only = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (name, 1 if enabled else 0, 1 if auto_run else 0, 1 if admin_only else 0, now, prompt_id),
                 )
-                next_prompts.append(asdict(updated_prompt))
-                seen = True
-                continue
-            if item_slug == resolved_slug:
-                raise ValueError("Prompt 标识已存在，请换一个。")
-            next_prompts.append(self._normalize_payload_item(item))
-
-        if not seen:
-            updated_prompt = PromptDefinition(
-                slug=resolved_slug,
-                name=name,
-                user_prompt=user_prompt,
-                model=model,
-                enabled=enabled,
-                auto_run=auto_run,
-                created_at=now,
-                updated_at=now,
-            )
-            next_prompts.append(asdict(updated_prompt))
-
-        self._write_payload({"prompts": next_prompts})
-        return updated_prompt
+                conn.execute(
+                    """
+                    INSERT INTO prompt_versions(prompt_id, version, user_prompt, model, created_by_user_id, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (prompt_id, next_version, user_prompt, model, created_by_user_id, now),
+                )
+            else:
+                if resolved_slug in used_slugs:
+                    raise ValueError("Prompt 标识已存在，请换一个。")
+                cursor = conn.execute(
+                    """
+                    INSERT INTO prompts(slug, name, enabled, auto_run, admin_only, is_deleted, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                    """,
+                    (resolved_slug, name, 1 if enabled else 0, 1 if auto_run else 0, 1 if admin_only else 0, now, now),
+                )
+                prompt_id_raw = cursor.lastrowid
+                if prompt_id_raw is None:
+                    raise RuntimeError("Failed to persist prompt.")
+                prompt_id = int(prompt_id_raw)
+                conn.execute(
+                    """
+                    INSERT INTO prompt_versions(prompt_id, version, user_prompt, model, created_by_user_id, created_at)
+                    VALUES (?, 1, ?, ?, ?, ?)
+                    """,
+                    (prompt_id, user_prompt, model, created_by_user_id, now),
+                )
+        prompt = self.get_prompt(existing_slug or resolved_slug)
+        if prompt is None:
+            raise RuntimeError("Failed to load prompt after save.")
+        return prompt
 
     def delete_prompt(self, slug: str) -> PromptDefinition:
-        payload = self._load_payload()
-        prompts = payload.get("prompts", [])
-        next_prompts: list[dict[str, Any]] = []
-        removed: PromptDefinition | None = None
-        for item in prompts:
-            prompt = self._coerce_prompt(item)
-            if prompt is None:
-                continue
-            if prompt.slug == slug:
-                removed = prompt
-                continue
-            next_prompts.append(asdict(prompt))
-        if removed is None:
+        prompt = self.get_prompt(slug)
+        if prompt is None:
             raise FileNotFoundError(slug)
-        self._write_payload({"prompts": next_prompts})
-        return removed
+        with self._connect() as conn:
+            conn.execute(
+                "UPDATE prompts SET is_deleted = 1, enabled = 0, updated_at = ? WHERE slug = ?",
+                (datetime.utcnow().isoformat(timespec="seconds"), slug),
+            )
+        return prompt
 
-    def _coerce_prompt(self, item: Any) -> PromptDefinition | None:
+    def _list_prompt_rows(self) -> list[PromptDefinition]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    p.id AS prompt_id,
+                    p.slug,
+                    p.name,
+                    p.enabled,
+                    p.auto_run,
+                    p.admin_only,
+                    p.created_at,
+                    p.updated_at,
+                    pv.id AS version_id,
+                    pv.version,
+                    pv.user_prompt,
+                    pv.model
+                FROM prompts p
+                JOIN prompt_versions pv
+                  ON pv.id = (
+                      SELECT latest.id
+                      FROM prompt_versions latest
+                      WHERE latest.prompt_id = p.id
+                      ORDER BY latest.version DESC, latest.id DESC
+                      LIMIT 1
+                  )
+                WHERE p.is_deleted = 0
+                ORDER BY
+                    CASE WHEN p.slug = ? THEN 0 ELSE 1 END,
+                    CASE WHEN p.enabled = 1 THEN 0 ELSE 1 END,
+                    LOWER(p.name),
+                    p.created_at
+                """,
+                (DEFAULT_PROMPT_SLUG,),
+            ).fetchall()
+        return [self._row_to_prompt(row) for row in rows]
+
+    def _row_to_prompt(self, row: sqlite3.Row) -> PromptDefinition:
+        return PromptDefinition(
+            slug=str(row["slug"]),
+            name=str(row["name"]),
+            user_prompt=str(row["user_prompt"]),
+            model=str(row["model"] or DEFAULT_MODEL),
+            enabled=bool(row["enabled"]),
+            auto_run=bool(row["auto_run"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+            prompt_id=int(row["prompt_id"]),
+            version_id=int(row["version_id"]),
+            version=int(row["version"]),
+            admin_only=bool(row["admin_only"]),
+        )
+
+    def _insert_prompt(self, prompt: PromptDefinition, created_by_user_id: int | None) -> None:
+        now = prompt.updated_at or datetime.utcnow().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO prompts(slug, name, enabled, auto_run, admin_only, is_deleted, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 0, ?, ?)
+                """,
+                (
+                    prompt.slug,
+                    prompt.name,
+                    1 if prompt.enabled else 0,
+                    1 if prompt.auto_run else 0,
+                    1 if prompt.admin_only else 0,
+                    prompt.created_at or now,
+                    now,
+                ),
+            )
+            prompt_id_raw = cursor.lastrowid
+            if prompt_id_raw is None:
+                raise RuntimeError("Failed to migrate prompt.")
+            conn.execute(
+                """
+                INSERT INTO prompt_versions(prompt_id, version, user_prompt, model, created_by_user_id, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (int(prompt_id_raw), max(1, int(prompt.version or 1)), prompt.user_prompt, prompt.model, created_by_user_id, now),
+            )
+
+    def _coerce_legacy_prompt(self, item: Any) -> PromptDefinition | None:
         if not isinstance(item, dict):
             return None
         try:
@@ -193,15 +333,10 @@ class PromptStore:
             auto_run=auto_run,
             created_at=created_at,
             updated_at=updated_at,
+            admin_only=True,
         )
 
-    def _normalize_payload_item(self, item: Any) -> dict[str, Any]:
-        prompt = self._coerce_prompt(item)
-        if prompt is None:
-            return asdict(self.default_prompt())
-        return asdict(prompt)
-
-    def _load_payload(self) -> dict[str, Any]:
+    def _load_legacy_payload(self) -> dict[str, Any]:
         if not self.store_path.exists():
             return {}
         try:
@@ -209,9 +344,6 @@ class PromptStore:
         except json.JSONDecodeError:
             return {}
         return payload if isinstance(payload, dict) else {}
-
-    def _write_payload(self, payload: dict[str, Any]) -> None:
-        self.store_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _choose_slug(self, *, name: str, requested_slug: str, used_slugs: set[str]) -> str:
         normalized_requested = slugify(requested_slug)

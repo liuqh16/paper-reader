@@ -95,6 +95,18 @@
           {% if selected_paper.extracted_date %}<span>{{ selected_paper.extracted_date }}</span>{% endif %}
           <span>{{ format_bytes(selected_paper.file_size) }}</span>
           <span>{{ selected_paper.prompt_result_count }}/{{ active_prompt_count }} 个 Prompt 已完成</span>
+          <span>{{ selected_paper_context.recommendation_count }} 条推荐</span>
+          <span>{{ selected_paper_context.like_count }} 个赞</span>
+          <span>{{ selected_paper_context.comment_count }} 条评论</span>
+          <form action="{{ url_for('like_toggle_route') }}" method="post" class="inline-form">
+            <input type="hidden" name="folder" value="{{ current_folder }}">
+            <input type="hidden" name="q" value="{{ query }}">
+            <input type="hidden" name="sort" value="{{ sort_by }}">
+            <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+            <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+            <input type="hidden" name="tab" value="{{ selected_tab }}">
+            <button type="submit" class="secondary">{% if selected_paper_context.liked_by_current_user %}取消点赞{% else %}点赞{% endif %}</button>
+          </form>
           <form action="{{ url_for('done_toggle_route') }}" method="post" class="inline-form">
             <input type="hidden" name="folder" value="{{ current_folder }}">
             <input type="hidden" name="q" value="{{ query }}">
@@ -106,6 +118,99 @@
           </form>
         </div>
       </div>
+
+      <section class="team-paper-grid">
+        <article class="team-paper-card">
+          <div class="team-paper-card-head">
+            <strong>推荐</strong>
+            <span>{{ selected_paper_context.recommendation_count }} 条</span>
+          </div>
+          <div class="team-chip-list">
+            {% for recommendation in selected_paper_context.recommendations %}
+              <div class="team-note-item">
+                <strong>{{ recommendation.display_name }}</strong>
+                <p>{{ recommendation.reason }}</p>
+                <small>{{ recommendation.created_at }}</small>
+              </div>
+            {% else %}
+              <p class="team-empty-copy">还没有人写推荐理由。</p>
+            {% endfor %}
+          </div>
+          <form action="{{ url_for('recommend_route') }}" method="post" class="team-inline-form">
+            <input type="hidden" name="folder" value="{{ current_folder }}">
+            <input type="hidden" name="q" value="{{ query }}">
+            <input type="hidden" name="sort" value="{{ sort_by }}">
+            <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+            <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+            <input type="hidden" name="tab" value="{{ selected_tab }}">
+            <textarea name="reason" rows="3" placeholder="补充这篇论文为什么值得团队关注"></textarea>
+            <button type="submit">保存推荐理由</button>
+          </form>
+        </article>
+
+        <article class="team-paper-card">
+          <div class="team-paper-card-head">
+            <strong>标签</strong>
+            <span>{{ selected_paper_context.tags|length }} 个</span>
+          </div>
+          <div class="team-chip-list">
+            {% for tag in selected_paper_context.tags %}
+              <div class="team-tag-chip source-{{ tag.source_type }}">
+                <span>#{{ tag.name }}</span>
+                <small>{{ 'AI' if tag.source_type == 'auto' else ('官方' if tag.source_type == 'official' else '手动') }}</small>
+                {% if is_admin or (tag.source_type == 'manual' and current_user and current_user.display_name == tag.added_by_display_name) %}
+                  <form action="{{ url_for('tag_remove_route') }}" method="post" class="inline-form">
+                    <input type="hidden" name="folder" value="{{ current_folder }}">
+                    <input type="hidden" name="q" value="{{ query }}">
+                    <input type="hidden" name="sort" value="{{ sort_by }}">
+                    <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+                    <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+                    <input type="hidden" name="tab" value="{{ selected_tab }}">
+                    <input type="hidden" name="tag_id" value="{{ tag.id }}">
+                    <button type="submit" class="ghost-button">×</button>
+                  </form>
+                {% endif %}
+              </div>
+            {% else %}
+              <p class="team-empty-copy">系统还没有为这篇论文生成标签。</p>
+            {% endfor %}
+          </div>
+          <form action="{{ url_for('tag_add_route') }}" method="post" class="team-inline-form compact-form">
+            <input type="hidden" name="folder" value="{{ current_folder }}">
+            <input type="hidden" name="q" value="{{ query }}">
+            <input type="hidden" name="sort" value="{{ sort_by }}">
+            <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+            <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+            <input type="hidden" name="tab" value="{{ selected_tab }}">
+            <input type="text" name="tag_name" placeholder="添加标签，例如：diffusion / robotics">
+            <button type="submit">添加</button>
+          </form>
+        </article>
+
+        <article class="team-paper-card">
+          <div class="team-paper-card-head">
+            <strong>共享结果与来源</strong>
+            <span>{{ selected_paper_context.prompt_runs|length }} 条</span>
+          </div>
+          <div class="team-note-list">
+            {% for run in selected_paper_context.prompt_runs %}
+              <div class="team-note-item">
+                <strong>{{ run.prompt_name }}</strong>
+                <p>v{{ run.prompt_version }} · {{ run.model }}</p>
+                <small>{% if run.generated_by_display_name %}{{ run.generated_by_display_name }} · {% endif %}{{ run.generated_at or '已生成' }}</small>
+              </div>
+            {% else %}
+              <p class="team-empty-copy">这篇论文还没有共享 Prompt 结果记录。</p>
+            {% endfor %}
+            {% for source in selected_paper_context.sources %}
+              <div class="team-note-item muted-item">
+                <strong>{{ source.source_type }}</strong>
+                <p>{{ source.source_value }}</p>
+              </div>
+            {% endfor %}
+          </div>
+        </article>
+      </section>
 
       <div class="viewer-tabs">
         <a
@@ -256,7 +361,58 @@
             </form>
           </div>
         {% endif %}
+
       {% endif %}
+
+      <section class="team-discussion-card">
+        <div class="team-paper-card-head">
+          <strong>团队讨论</strong>
+          <span>{{ selected_paper_context.comment_count }} 条</span>
+        </div>
+        <form action="{{ url_for('comment_route') }}" method="post" class="team-inline-form">
+          <input type="hidden" name="folder" value="{{ current_folder }}">
+          <input type="hidden" name="q" value="{{ query }}">
+          <input type="hidden" name="sort" value="{{ sort_by }}">
+          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+          <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+          <input type="hidden" name="tab" value="{{ selected_tab }}">
+          <textarea name="body" rows="3" placeholder="围绕这篇论文记录观点、问题或后续动作"></textarea>
+          <button type="submit">发表评论</button>
+        </form>
+        <div class="team-comment-list">
+          {% for comment in selected_paper_context.comments %}
+            <article class="team-comment-item">
+              <header>
+                <strong>{{ comment.display_name }}</strong>
+                <small>{{ comment.created_at }}</small>
+              </header>
+              <p>{{ comment.body }}</p>
+              {% for reply in comment.replies %}
+                <div class="team-comment-reply">
+                  <header>
+                    <strong>{{ reply.display_name }}</strong>
+                    <small>{{ reply.created_at }}</small>
+                  </header>
+                  <p>{{ reply.body }}</p>
+                </div>
+              {% endfor %}
+              <form action="{{ url_for('comment_route') }}" method="post" class="team-inline-form compact-form reply-form">
+                <input type="hidden" name="folder" value="{{ current_folder }}">
+                <input type="hidden" name="q" value="{{ query }}">
+                <input type="hidden" name="sort" value="{{ sort_by }}">
+                <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+                <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+                <input type="hidden" name="tab" value="{{ selected_tab }}">
+                <input type="hidden" name="parent_id" value="{{ comment.id }}">
+                <input type="text" name="body" placeholder="回复 {{ comment.display_name }}">
+                <button type="submit">回复</button>
+              </form>
+            </article>
+          {% else %}
+            <p class="team-empty-copy">还没有评论，适合先留下第一条团队结论。</p>
+          {% endfor %}
+        </div>
+      </section>
     {% else %}
       <div class="viewer-empty">
         <h3>还没有选中文件</h3>
@@ -363,6 +519,25 @@
         </div>
         <div class="upload-file-list" id="upload-file-list"></div>
       </section>
+
+      <form class="tool-grid" action="{{ url_for('import_link_route') }}" method="post">
+        <input type="hidden" name="folder" value="{{ current_folder }}">
+        <input type="hidden" name="q" value="{{ query }}">
+        <input type="hidden" name="sort" value="{{ sort_by }}">
+        <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+        <label>
+          <span>arXiv / OpenReview / PDF 链接</span>
+          <input type="text" name="import_target" placeholder="例如：2501.12948 / https://arxiv.org/abs/... / https://...pdf">
+        </label>
+        <label>
+          <span>推荐理由（可选）</span>
+          <input type="text" name="recommendation_reason" placeholder="例如：适合本周组会讨论">
+        </label>
+        <div class="tool-hint">MVP 先支持 arXiv ID、arXiv 链接、OpenReview PDF 链接和直接 PDF 链接。</div>
+        <div class="tool-actions">
+          <button type="submit">导入远程论文</button>
+        </div>
+      </form>
 
       <form class="tool-grid" action="{{ url_for('create_folder_route') }}" method="post">
         <input type="hidden" name="folder" value="{{ current_folder }}">
@@ -508,6 +683,17 @@
       data-panel-url="{{ url_for('tool_panel_route', panel_name='prompt-manager', folder=current_folder, q=query, sort=sort_by, paper=selected_paper.rel_path if selected_paper else None, tab=selected_tab, show_done='1' if show_done else None) }}"
     >
       <p class="lazy-panel-hint">展开时再加载 Prompt 管理器，减少首页首屏负担。</p>
+    </div>
+  </details>
+
+  <details class="tool-panel">
+    <summary>Team 管理</summary>
+    <div
+      class="lazy-panel-slot"
+      data-lazy-panel
+      data-panel-url="{{ url_for('tool_panel_route', panel_name='team-admin', folder=current_folder, q=query, sort=sort_by, paper=selected_paper.rel_path if selected_paper else None, tab=selected_tab, show_done='1' if show_done else None) }}"
+    >
+      <p class="lazy-panel-hint">管理员可在这里创建团队成员账号并管理角色。</p>
     </div>
   </details>
 

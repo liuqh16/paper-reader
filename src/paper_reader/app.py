@@ -9,7 +9,8 @@ import string
 import tempfile
 import threading
 import time
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
+from urllib.request import Request, urlopen
 import zipfile
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -28,6 +29,7 @@ from .prompt_manager import DEFAULT_PROMPT_SLUG, PromptDefinition, PromptStore, 
 from .settings import SettingsStore
 from .source_archive import day_paper_map, load_source_day, load_source_days, local_pdf_path_for
 from .task_queue import PaperJobQueue
+from .team_store import TeamStore, TeamUser, flatten_comments
 
 CACHE_FILE_NAME = ".paper_reader_index.json"
 DONE_INDEX_FILE_NAME = ".paper_reader_done_index.json"
@@ -131,7 +133,7 @@ class LoginGuard:
 
 
 class PaperLibrary:
-    def __init__(self, root: Path, prompt_store: PromptStore):
+    def __init__(self, root: Path, prompt_store: PromptStore, team_store: Any | None = None):
         self.root = root.resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.cache_path = self.root / CACHE_FILE_NAME
@@ -139,6 +141,7 @@ class PaperLibrary:
         self.summary_root = self.root / SUMMARY_DIR_NAME
         self.summary_root.mkdir(parents=True, exist_ok=True)
         self.prompt_store = prompt_store
+        self.team_store = team_store
         self._hash_cache: dict[str, tuple[float, int, str]] = {}
         self._scan_lock = threading.RLock()
         self._scan_cache: dict[tuple[bool, bool], ScanResult] = {}
@@ -809,6 +812,31 @@ class PaperLibrary:
             self._update_active_index_entry(rel_path)
         return result_path
 
+    def _record_prompt_run(self, rel_path: str, prompt: PromptDefinition, result_path: Path, *, triggered_by_user_id: int | None) -> None:
+        if self.team_store is None:
+            return
+        try:
+            generated_at = datetime.fromtimestamp(result_path.stat().st_mtime).isoformat(timespec="seconds")
+        except OSError:
+            generated_at = datetime.utcnow().isoformat(timespec="seconds")
+        try:
+            result_rel_path = result_path.relative_to(self.root).as_posix()
+        except ValueError:
+            result_rel_path = None
+        self.team_store.record_prompt_run(
+            rel_path,
+            prompt_slug=prompt.slug,
+            prompt_name=prompt.name,
+            prompt_version_id=prompt.version_id,
+            prompt_version=prompt.version,
+            model=prompt.model or DEFAULT_MODEL,
+            result_rel_path=result_rel_path,
+            status="completed",
+            triggered_by_user_id=triggered_by_user_id,
+            generated_at=generated_at,
+            shared=True,
+        )
+
     def generate_prompt_result(
         self,
         rel_path: str,
@@ -818,6 +846,7 @@ class PaperLibrary:
         progress_callback: Callable[[int, str], None] | None = None,
         should_abort: Callable[[], bool] | None = None,
         process_callback: Callable[[Any], None] | None = None,
+        triggered_by_user_id: int | None = None,
     ) -> tuple[Path, bool]:
         document_path = self.resolve_relative_path(rel_path)
         if not document_path.exists() or not document_path.is_file():
@@ -825,6 +854,7 @@ class PaperLibrary:
 
         existing = self._existing_prompt_result_path(rel_path, prompt.slug)
         if existing is not None and existing.exists() and not force:
+            self._record_prompt_run(rel_path, prompt, existing, triggered_by_user_id=triggered_by_user_id)
             return existing, False
 
         content = run_prompt_on_document(
@@ -835,7 +865,9 @@ class PaperLibrary:
             should_abort=should_abort,
             process_callback=process_callback,
         )
-        return self.write_prompt_result(rel_path, prompt, content), True
+        result_path = self.write_prompt_result(rel_path, prompt, content)
+        self._record_prompt_run(rel_path, prompt, result_path, triggered_by_user_id=triggered_by_user_id)
+        return result_path, True
 
     def run_prompt_batch(
         self,
@@ -1012,9 +1044,11 @@ def filter_and_sort_papers(
     sort_by: str,
     *,
     show_done: bool = False,
+    metadata_matches: set[str] | None = None,
 ) -> list[PaperRecord]:
     query_text = query.strip().lower()
     folder = folder.strip().strip("/")
+    metadata_matches = metadata_matches or set()
     filtered: list[PaperRecord] = []
     for paper in papers:
         if paper.is_done and not show_done:
@@ -1022,7 +1056,7 @@ def filter_and_sort_papers(
         if folder and not (paper.folder == folder or paper.folder.startswith(folder + "/")):
             continue
         haystack = f"{paper.file_name} {paper.display_title}".lower()
-        if query_text and query_text not in haystack:
+        if query_text and query_text not in haystack and paper.rel_path not in metadata_matches:
             continue
         filtered.append(paper)
 
@@ -1161,8 +1195,10 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.settings_store = SettingsStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
-    app.prompt_store = PromptStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
-    app.library = PaperLibrary(app.config["LIBRARY_ROOT"], app.prompt_store)  # type: ignore[attr-defined]
+    app.team_store = TeamStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
+    app.team_store.bootstrap_default_user(login_username, login_password)  # type: ignore[attr-defined]
+    app.prompt_store = PromptStore(app.config["LIBRARY_ROOT"], app.team_store.db_path)  # type: ignore[attr-defined]
+    app.library = PaperLibrary(app.config["LIBRARY_ROOT"], app.prompt_store, app.team_store)  # type: ignore[attr-defined]
     app.login_guard = LoginGuard()  # type: ignore[attr-defined]
     app.job_queue = PaperJobQueue(  # type: ignore[attr-defined]
         app.library,
@@ -1170,20 +1206,62 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         max_concurrency=app.settings_store.max_concurrency(),  # type: ignore[attr-defined]
     )
 
+    def current_user() -> TeamUser | None:
+        user_id = session.get("user_id")
+        if isinstance(user_id, int):
+            user = app.team_store.get_user(user_id)  # type: ignore[attr-defined]
+            if user is not None:
+                return user
+        username = session.get("username")
+        if isinstance(username, str) and username:
+            user = app.team_store.get_user_by_username(username)  # type: ignore[attr-defined]
+            if user is not None:
+                session["user_id"] = user.id
+                session["display_name"] = user.display_name
+                session["role"] = user.role
+                session["authenticated"] = True
+                return user
+        return None
+
+    def current_user_id() -> int | None:
+        user = current_user()
+        return user.id if user is not None else None
+
+    def is_admin_user() -> bool:
+        user = current_user()
+        return bool(user and user.role == "admin")
+
+    def require_admin_user() -> TeamUser | None:
+        user = current_user()
+        if user is None or user.role != "admin":
+            flash("这个操作需要管理员权限。", "error")
+            return None
+        return user
+
+    def start_user_session(user: TeamUser) -> None:
+        session["authenticated"] = True
+        session["user_id"] = user.id
+        session["username"] = user.username
+        session["display_name"] = user.display_name
+        session["role"] = user.role
+
     @app.context_processor
     def inject_helpers() -> dict[str, Any]:
+        user = current_user()
         return {
             "format_bytes": format_bytes,
             "allowed_extensions": ", ".join(sorted(ALLOWED_EXTENSIONS)),
+            "current_user": user,
+            "is_admin": bool(user and user.role == "admin"),
         }
 
     @app.before_request
     def require_login() -> Any:
         endpoint = request.endpoint or ""
-        allowed = {"login", "health"}
+        allowed = {"login", "logout", "health"}
         if endpoint in allowed or endpoint.startswith("static"):
             return None
-        if session.get("authenticated"):
+        if session.get("authenticated") and current_user() is not None:
             return None
         next_url = request.full_path if request.query_string else request.path
         return redirect(url_for("login", next=next_url.rstrip("?")))
@@ -1191,6 +1269,12 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     @app.get("/health")
     def health() -> Any:
         return {"ok": True}
+
+    @app.get("/logout")
+    def logout() -> Any:
+        session.clear()
+        flash("你已退出登录。", "success")
+        return redirect(url_for("login"))
 
     @app.route("/login", methods=["GET", "POST"])
     def login() -> Any:
@@ -1204,10 +1288,10 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             else:
                 username = request.form.get("username", "").strip()
                 password = request.form.get("password", "")
-                if username == app.config["LOGIN_USERNAME"] and password == app.config["LOGIN_PASSWORD"]:
+                user = app.team_store.authenticate_user(username, password)  # type: ignore[attr-defined]
+                if user is not None:
                     app.login_guard.register_success(client_key)  # type: ignore[attr-defined]
-                    session["authenticated"] = True
-                    session["username"] = app.config["LOGIN_USERNAME"]
+                    start_user_session(user)
                     return redirect(next_url or url_for("index"))
 
                 failure = app.login_guard.register_failure(client_key)  # type: ignore[attr-defined]
@@ -1266,6 +1350,12 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             ),
         }
 
+    def ensure_paper_metadata(rel_path: str) -> PaperRecord:
+        visible_slugs = [prompt.slug for prompt in app.prompt_store.active_prompts()]  # type: ignore[attr-defined]
+        paper = app.library.build_record_for_rel_path(rel_path, visible_slugs)  # type: ignore[attr-defined]
+        app.team_store.sync_papers([paper])  # type: ignore[attr-defined]
+        return paper
+
     def process_uploaded_file(
         file: Any,
         *,
@@ -1309,6 +1399,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             app.library._update_active_index_entry(rel_path)  # type: ignore[attr-defined]
         active_prompts = app.prompt_store.active_prompts()  # type: ignore[attr-defined]
         paper = app.library.build_record_for_rel_path(rel_path, [prompt.slug for prompt in active_prompts])  # type: ignore[attr-defined]
+        app.team_store.sync_papers([paper])  # type: ignore[attr-defined]
         visible_in_current_view = bool(
             filter_and_sort_papers([paper], folder=current_folder, query=query, sort_by=sort_by, show_done=show_done)
         )
@@ -1317,11 +1408,14 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         if submit_auto_prompts:
             auto_prompts = [prompt for prompt in active_prompts if prompt.auto_run]
             if auto_prompts:
+                actor = current_user()
                 submission = app.job_queue.submit(  # type: ignore[attr-defined]
                     [rel_path],
                     [prompt.slug for prompt in auto_prompts],
                     force=False,
                     source="upload",
+                    requested_by_user_id=actor.id if actor else None,
+                    requested_by_display_name=actor.display_name if actor else None,
                 )
 
         message = f"上传成功：{destination.name}"
@@ -1389,6 +1483,16 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
 
             if result["status"] == "saved" and result["saved_rel_path"]:
                 saved_rel_paths.append(result["saved_rel_path"])
+                active_prompt_slugs = [prompt.slug for prompt in app.prompt_store.active_prompts()]  # type: ignore[attr-defined]
+                imported_record = app.library.build_record_for_rel_path(result["saved_rel_path"], active_prompt_slugs)  # type: ignore[attr-defined]
+                app.team_store.sync_papers([imported_record])  # type: ignore[attr-defined]
+                app.team_store.add_source(  # type: ignore[attr-defined]
+                    result["saved_rel_path"],
+                    source_type=day_record.source,
+                    source_value=paper.paper_id or paper.title,
+                    source_url=paper.url,
+                    imported_by_user_id=current_user_id(),
+                )
             elif result["status"] == "duplicate":
                 duplicate_count += 1
 
@@ -1396,11 +1500,14 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         if saved_rel_paths:
             auto_prompts = app.prompt_store.auto_prompts()  # type: ignore[attr-defined]
             if auto_prompts:
+                actor = current_user()
                 submission = app.job_queue.submit(  # type: ignore[attr-defined]
                     saved_rel_paths,
                     [prompt.slug for prompt in auto_prompts],
                     force=False,
                     source="source-import",
+                    requested_by_user_id=actor.id if actor else None,
+                    requested_by_display_name=actor.display_name if actor else None,
                 )
 
         return {
@@ -1410,6 +1517,144 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             "error_messages": error_messages,
             "submission": submission,
         }
+
+    def resolve_import_target(raw_target: str) -> dict[str, str]:
+        target = raw_target.strip()
+        if not target:
+            raise ValueError("请填写 arXiv ID、论文链接或 PDF 链接。")
+
+        arxiv_match = re.fullmatch(r"\d{4}\.\d{4,5}(?:v\d+)?", target)
+        if arxiv_match:
+            paper_id = arxiv_match.group(0)
+            return {
+                "source_type": "arxiv",
+                "source_value": paper_id,
+                "source_url": f"https://arxiv.org/abs/{paper_id}",
+                "download_url": f"https://arxiv.org/pdf/{paper_id}.pdf",
+                "target_folder": "Imports/arXiv",
+                "preferred_name": f"{paper_id}.pdf",
+            }
+
+        parsed = urlparse(target)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError("当前只支持 arXiv ID、HTTP/HTTPS 论文链接或 PDF 链接。")
+
+        host = (parsed.netloc or "").lower()
+        path = parsed.path or ""
+        if host.endswith("arxiv.org"):
+            arxiv_url_match = re.search(r"(\d{4}\.\d{4,5}(?:v\d+)?)", target)
+            if arxiv_url_match is None:
+                raise ValueError("无法从 arXiv 链接中识别论文 ID。")
+            paper_id = arxiv_url_match.group(1)
+            return {
+                "source_type": "arxiv",
+                "source_value": paper_id,
+                "source_url": f"https://arxiv.org/abs/{paper_id}",
+                "download_url": f"https://arxiv.org/pdf/{paper_id}.pdf",
+                "target_folder": "Imports/arXiv",
+                "preferred_name": f"{paper_id}.pdf",
+            }
+
+        if host.endswith("openreview.net") and path.endswith(".pdf"):
+            preferred_name = Path(path).name or "openreview-paper.pdf"
+            return {
+                "source_type": "openreview",
+                "source_value": target,
+                "source_url": target,
+                "download_url": target,
+                "target_folder": "Imports/OpenReview",
+                "preferred_name": preferred_name,
+            }
+
+        if path.endswith(".pdf"):
+            preferred_name = Path(path).name or "paper.pdf"
+            return {
+                "source_type": "pdf_url",
+                "source_value": target,
+                "source_url": target,
+                "download_url": target,
+                "target_folder": "Imports/Links",
+                "preferred_name": preferred_name,
+            }
+
+        raise ValueError("暂时只支持 arXiv ID / arXiv 链接 / OpenReview PDF 链接 / 直接 PDF 链接。")
+
+    def download_remote_pdf(download_url: str) -> Path:
+        request_obj = Request(download_url, headers={"User-Agent": "paper-reader/1.0"})
+        with urlopen(request_obj, timeout=60) as response, tempfile.NamedTemporaryFile(prefix="paper-reader-import-", suffix=".pdf", delete=False) as handle:
+            handle.write(response.read())
+            return Path(handle.name)
+
+    def import_remote_paper(target: str, recommendation_reason: str) -> dict[str, Any]:
+        actor = current_user()
+        if actor is None:
+            raise PermissionError("需要先登录。")
+        resolved = resolve_import_target(target)
+        existing_rel_path = app.team_store.find_paper_by_source(resolved["source_type"], resolved["source_value"])  # type: ignore[attr-defined]
+        if existing_rel_path:
+            if recommendation_reason.strip():
+                app.team_store.add_recommendation(existing_rel_path, actor.id, recommendation_reason)  # type: ignore[attr-defined]
+            return {"status": "existing", "rel_path": existing_rel_path, "source": resolved}
+
+        temp_path = download_remote_pdf(resolved["download_url"])
+        try:
+            result = app.library.import_external_file(  # type: ignore[attr-defined]
+                temp_path,
+                resolved["target_folder"],
+                preferred_name=resolved["preferred_name"],
+            )
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        if result["status"] == "duplicate" and result.get("duplicate_rel_path"):
+            rel_path = str(result["duplicate_rel_path"])
+        elif result["status"] == "saved" and result.get("saved_rel_path"):
+            rel_path = str(result["saved_rel_path"])
+            active_prompt_slugs = [prompt.slug for prompt in app.prompt_store.active_prompts()]  # type: ignore[attr-defined]
+            imported_record = app.library.build_record_for_rel_path(rel_path, active_prompt_slugs)  # type: ignore[attr-defined]
+            app.team_store.sync_papers([imported_record])  # type: ignore[attr-defined]
+        else:
+            raise RuntimeError(result.get("message") or "远程导入失败。")
+
+        app.team_store.add_source(  # type: ignore[attr-defined]
+            rel_path,
+            source_type=resolved["source_type"],
+            source_value=resolved["source_value"],
+            source_url=resolved["source_url"],
+            imported_by_user_id=actor.id,
+        )
+        if recommendation_reason.strip():
+            app.team_store.add_recommendation(rel_path, actor.id, recommendation_reason)  # type: ignore[attr-defined]
+
+        auto_prompts = app.prompt_store.auto_prompts()  # type: ignore[attr-defined]
+        submission = {"queued": 0, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}
+        if auto_prompts:
+            submission = app.job_queue.submit(  # type: ignore[attr-defined]
+                [rel_path],
+                [prompt.slug for prompt in auto_prompts],
+                force=False,
+                source="remote-import",
+                requested_by_user_id=actor.id,
+                requested_by_display_name=actor.display_name,
+            )
+        return {"status": result["status"], "rel_path": rel_path, "source": resolved, "submission": submission}
+
+    def ensure_prompt_run_metadata(paper: PaperRecord, prompts: list[PromptDefinition]) -> None:
+        for prompt in prompts:
+            result_path = app.library.existing_prompt_result_path(paper.rel_path, prompt.slug)  # type: ignore[attr-defined]
+            if result_path is None:
+                continue
+            generated_at = datetime.fromtimestamp(result_path.stat().st_mtime).isoformat(timespec="seconds")
+            app.team_store.backfill_prompt_run(  # type: ignore[attr-defined]
+                paper.rel_path,
+                prompt_slug=prompt.slug,
+                prompt_name=prompt.name,
+                prompt_version_id=prompt.version_id,
+                prompt_version=prompt.version,
+                model=prompt.model or DEFAULT_MODEL,
+                result_rel_path=result_path.relative_to(app.library.root).as_posix(),  # type: ignore[attr-defined]
+                generated_at=generated_at,
+            )
 
     def build_batch_papers(
         *,
@@ -1422,12 +1667,15 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     ) -> list[PaperRecord]:
         include_done = show_done or batch_show_done or selected_rel_path.startswith(f"{DONE_DIR_NAME}/")
         scan = app.library.scan(include_done=include_done)  # type: ignore[attr-defined]
+        app.team_store.sync_papers(scan.papers)  # type: ignore[attr-defined]
+        metadata_matches = app.team_store.search_rel_paths(query) if query.strip() else set()  # type: ignore[attr-defined]
         batch_papers = filter_and_sort_papers(
             scan.papers,
             folder=folder,
             query=query,
             sort_by=sort_by,
             show_done=(show_done or batch_show_done),
+            metadata_matches=metadata_matches,
         )
         if not batch_show_done:
             batch_papers = [paper for paper in batch_papers if not paper.is_done]
@@ -1445,16 +1693,26 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
 
         include_done = show_done or batch_show_done or selected_rel_path.startswith(f"{DONE_DIR_NAME}/")
         scan = app.library.scan(include_done=include_done)  # type: ignore[attr-defined]
+        app.team_store.sync_papers(scan.papers)  # type: ignore[attr-defined]
         all_prompts = app.prompt_store.list_prompts()  # type: ignore[attr-defined]
         active_prompts = [prompt for prompt in all_prompts if prompt.enabled]
+        metadata_matches = app.team_store.search_rel_paths(query) if query.strip() else set()  # type: ignore[attr-defined]
 
-        papers = filter_and_sort_papers(scan.papers, folder=folder, query=query, sort_by=sort_by, show_done=show_done)
+        papers = filter_and_sort_papers(
+            scan.papers,
+            folder=folder,
+            query=query,
+            sort_by=sort_by,
+            show_done=show_done,
+            metadata_matches=metadata_matches,
+        )
         batch_papers = filter_and_sort_papers(
             scan.papers,
             folder=folder,
             query=query,
             sort_by=sort_by,
             show_done=(show_done or batch_show_done),
+            metadata_matches=metadata_matches,
         )
         if not batch_show_done:
             batch_papers = [paper for paper in batch_papers if not paper.is_done]
@@ -1464,6 +1722,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             query="",
             sort_by=sort_by,
             show_done=(show_done or batch_show_done),
+            metadata_matches=set(),
         )
         if not batch_show_done:
             batch_library_papers = [paper for paper in batch_library_papers if not paper.is_done]
@@ -1472,6 +1731,8 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         selected_paper = next((item for item in papers if item.rel_path == selected_rel_path), None)
         if selected_paper is None and papers:
             selected_paper = papers[0]
+        if selected_paper is not None:
+            ensure_prompt_run_metadata(selected_paper, all_prompts)
 
         return {
             "scan": scan,
@@ -1501,6 +1762,8 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         query = state["query"]
         sort_by = state["sort_by"]
         show_done = state["show_done"]
+        batch_show_done = state["batch_show_done"]
+        batch_page = state["batch_page"]
         selected_tab = state["selected_tab"]
         papers = state["papers"]
         batch_papers = state["batch_papers"]
@@ -1514,10 +1777,25 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         selected_prompt_info: dict[str, Any] | None = None
         selected_prompt_job: dict[str, Any] | None = None
         viewer_tabs: list[dict[str, Any]] = []
+        selected_paper_context: dict[str, Any] = {
+            "recommendations": [],
+            "tags": [],
+            "comments": [],
+            "like_count": 0,
+            "liked_by_current_user": False,
+            "recommendation_count": 0,
+            "comment_count": 0,
+            "prompt_runs": [],
+            "sources": [],
+        }
 
         if selected_paper:
             if selected_paper.preview_text:
                 preview_paragraphs = [chunk.strip() for chunk in selected_paper.preview_text.split("\n\n") if chunk.strip()]
+            selected_paper_context = app.team_store.paper_context(  # type: ignore[attr-defined]
+                selected_paper.rel_path,
+                current_user_id(),
+            )
             for prompt in active_prompts:
                 info = app.library.prompt_result_info(selected_paper.rel_path, prompt.slug)  # type: ignore[attr-defined]
                 latest_job = app.job_queue.latest_job_for(selected_paper.rel_path, prompt.slug)  # type: ignore[attr-defined]
@@ -1554,6 +1832,8 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             query=query,
             sort_by=sort_by,
             show_done=show_done,
+            batch_show_done=batch_show_done,
+            batch_page=batch_page,
             selected_paper=selected_paper,
             selected_tab=selected_tab,
             preview_paragraphs=preview_paragraphs,
@@ -1564,6 +1844,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             selected_prompt_html=selected_prompt_html,
             selected_prompt_info=selected_prompt_info,
             selected_prompt_job=selected_prompt_job,
+            selected_paper_context=selected_paper_context,
             active_prompts=active_prompts,
             active_prompt_count=len(active_prompts),
             library_root=app.config["LIBRARY_ROOT"],
@@ -1590,6 +1871,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 "panels/prompt_manager.html",
                 **context,
                 all_prompts=state["all_prompts"],
+                can_manage_prompts=is_admin_user(),
                 new_prompt_defaults={
                     "name": "",
                     "slug": "",
@@ -1616,6 +1898,14 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 batch_pagination=pagination,
                 batch_library_total=state["batch_library_total"],
                 all_prompts=state["all_prompts"],
+            )
+
+        if panel_name == "team-admin":
+            return render_template(
+                "panels/team_admin.html",
+                **context,
+                can_manage_team=is_admin_user(),
+                team_users=app.team_store.list_users(),  # type: ignore[attr-defined]
             )
 
         abort(404)
@@ -1666,11 +1956,14 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             flash(f"本次成功上传 {saved} 个文件。", "success")
             auto_prompts = app.prompt_store.auto_prompts()  # type: ignore[attr-defined]
             if auto_prompts:
+                actor = current_user()
                 submission = app.job_queue.submit(  # type: ignore[attr-defined]
                     saved_rel_paths,
                     [prompt.slug for prompt in auto_prompts],
                     force=False,
                     source="upload",
+                    requested_by_user_id=actor.id if actor else None,
+                    requested_by_display_name=actor.display_name if actor else None,
                 )
                 flash_submission_summary(submission, action_label="自动 Prompt 处理已转为后台任务")
         if duplicate_count:
@@ -1739,6 +2032,9 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         new_name = request.form.get("new_name", "").strip()
         try:
             new_rel_path = app.library.rename_file(rel_path, new_name)  # type: ignore[attr-defined]
+            active_prompt_slugs = [prompt.slug for prompt in app.prompt_store.active_prompts()]  # type: ignore[attr-defined]
+            moved_paper = app.library.build_record_for_rel_path(new_rel_path, active_prompt_slugs)  # type: ignore[attr-defined]
+            app.team_store.rename_paper(rel_path, moved_paper)  # type: ignore[attr-defined]
             flash("文件已重命名。", "success")
             return redirect_to_index(current_folder, query, sort_by, new_rel_path, tab, show_done=show_done)
         except (FileNotFoundError, ValueError) as exc:
@@ -1754,6 +2050,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         rel_path = request.form.get("rel_path", "").strip("/")
         try:
             app.library.delete_file(rel_path)  # type: ignore[attr-defined]
+            app.team_store.delete_paper(rel_path)  # type: ignore[attr-defined]
             flash("文件已删除。", "success")
         except FileNotFoundError:
             flash("文件不存在。", "error")
@@ -1769,6 +2066,9 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         tab = request.form.get("tab", "source")
         try:
             new_rel_path = app.library.toggle_done(rel_path)  # type: ignore[attr-defined]
+            active_prompt_slugs = [prompt.slug for prompt in app.prompt_store.active_prompts()]  # type: ignore[attr-defined]
+            moved_paper = app.library.build_record_for_rel_path(new_rel_path, active_prompt_slugs)  # type: ignore[attr-defined]
+            app.team_store.rename_paper(rel_path, moved_paper)  # type: ignore[attr-defined]
             moved_to_done = app.library.is_done_rel_path(new_rel_path)  # type: ignore[attr-defined]
             flash("论文已标记为 DONE。" if moved_to_done else "论文已恢复到未完成列表。", "success")
             selected_rel_path = new_rel_path if show_done else None
@@ -1805,7 +2105,15 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         if prompt is None:
             flash("Prompt 不存在。", "error")
             return redirect_to_index(current_folder, query, sort_by, rel_path or None, "source", show_done=show_done)
-        submission = app.job_queue.submit([rel_path], [prompt.slug], force=force, source="manual")  # type: ignore[attr-defined]
+        actor = current_user()
+        submission = app.job_queue.submit(  # type: ignore[attr-defined]
+            [rel_path],
+            [prompt.slug],
+            force=force,
+            source="manual",
+            requested_by_user_id=actor.id if actor else None,
+            requested_by_display_name=actor.display_name if actor else None,
+        )
         flash_submission_summary(submission, action_label=f"《{prompt.name}》后台任务已提交")
         return redirect_to_index(current_folder, query, sort_by, rel_path or None, prompt_slug, show_done=show_done)
 
@@ -1818,6 +2126,9 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
         existing_slug = request.form.get("existing_slug", "").strip() or None
+        admin_user = require_admin_user()
+        if admin_user is None:
+            return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
         try:
             prompt = app.prompt_store.save_prompt(  # type: ignore[attr-defined]
                 existing_slug=existing_slug,
@@ -1827,6 +2138,8 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 model=request.form.get("model", DEFAULT_MODEL),
                 enabled=parse_checkbox(request.form.get("enabled")),
                 auto_run=parse_checkbox(request.form.get("auto_run")),
+                admin_only=True,
+                created_by_user_id=admin_user.id,
             )
             flash(f"Prompt《{prompt.name}》已保存。", "success")
             app.library.invalidate_scan_cache()  # type: ignore[attr-defined]
@@ -1845,6 +2158,9 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
         prompt_slug = request.form.get("prompt_slug", "").strip()
+        admin_user = require_admin_user()
+        if admin_user is None:
+            return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
         try:
             removed = app.prompt_store.delete_prompt(prompt_slug)  # type: ignore[attr-defined]
             flash(f"Prompt《{removed.name}》已删除。", "success")
@@ -1854,6 +2170,159 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         except FileNotFoundError:
             flash("Prompt 不存在。", "error")
         return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
+
+    @app.post("/team/users/save")
+    def team_user_save_route() -> Any:
+        current_folder = request.form.get("folder", "")
+        query = request.form.get("q", "")
+        sort_by = request.form.get("sort", "date_desc")
+        show_done = parse_checkbox(request.form.get("show_done"))
+        selected_paper = request.form.get("paper", "") or None
+        tab = request.form.get("tab", "source")
+        admin_user = require_admin_user()
+        if admin_user is None:
+            return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
+        try:
+            user = app.team_store.create_user(  # type: ignore[attr-defined]
+                request.form.get("username", ""),
+                request.form.get("display_name", ""),
+                request.form.get("password", ""),
+                request.form.get("role", "member") or "member",
+            )
+            flash(f"成员 {user.display_name} 已创建。", "success")
+        except ValueError as exc:
+            flash(str(exc), "error")
+        return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
+
+    @app.post("/recommend")
+    def recommend_route() -> Any:
+        current_folder = request.form.get("folder", "")
+        query = request.form.get("q", "")
+        sort_by = request.form.get("sort", "date_desc")
+        show_done = parse_checkbox(request.form.get("show_done"))
+        rel_path = request.form.get("rel_path", "").strip("/")
+        tab = request.form.get("tab", "source")
+        actor = current_user()
+        if actor is None:
+            flash("请先登录。", "error")
+            return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+        try:
+            ensure_paper_metadata(rel_path)
+            app.team_store.add_recommendation(rel_path, actor.id, request.form.get("reason", ""))  # type: ignore[attr-defined]
+            flash("推荐理由已保存。", "success")
+        except (ValueError, FileNotFoundError) as exc:
+            flash(str(exc), "error")
+        return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+
+    @app.post("/like-toggle")
+    def like_toggle_route() -> Any:
+        current_folder = request.form.get("folder", "")
+        query = request.form.get("q", "")
+        sort_by = request.form.get("sort", "date_desc")
+        show_done = parse_checkbox(request.form.get("show_done"))
+        rel_path = request.form.get("rel_path", "").strip("/")
+        tab = request.form.get("tab", "source")
+        actor = current_user()
+        if actor is None:
+            flash("请先登录。", "error")
+            return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+        try:
+            ensure_paper_metadata(rel_path)
+            liked = app.team_store.toggle_like(rel_path, actor.id)  # type: ignore[attr-defined]
+            flash("已点赞。" if liked else "已取消点赞。", "success")
+        except FileNotFoundError:
+            flash("论文不存在。", "error")
+        return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+
+    @app.post("/comments")
+    def comment_route() -> Any:
+        current_folder = request.form.get("folder", "")
+        query = request.form.get("q", "")
+        sort_by = request.form.get("sort", "date_desc")
+        show_done = parse_checkbox(request.form.get("show_done"))
+        rel_path = request.form.get("rel_path", "").strip("/")
+        tab = request.form.get("tab", "source")
+        actor = current_user()
+        if actor is None:
+            flash("请先登录。", "error")
+            return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+        parent_id_value = request.form.get("parent_id", "").strip()
+        try:
+            ensure_paper_metadata(rel_path)
+            parent_id = int(parent_id_value) if parent_id_value else None
+            app.team_store.add_comment(rel_path, actor.id, request.form.get("body", ""), parent_id=parent_id)  # type: ignore[attr-defined]
+            flash("评论已发布。", "success")
+        except (ValueError, FileNotFoundError) as exc:
+            flash(str(exc), "error")
+        return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+
+    @app.post("/tags/add")
+    def tag_add_route() -> Any:
+        current_folder = request.form.get("folder", "")
+        query = request.form.get("q", "")
+        sort_by = request.form.get("sort", "date_desc")
+        show_done = parse_checkbox(request.form.get("show_done"))
+        rel_path = request.form.get("rel_path", "").strip("/")
+        tab = request.form.get("tab", "source")
+        actor = current_user()
+        if actor is None:
+            flash("请先登录。", "error")
+            return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+        source_type = "official" if actor.role == "admin" else "manual"
+        try:
+            ensure_paper_metadata(rel_path)
+            app.team_store.add_tag(  # type: ignore[attr-defined]
+                rel_path,
+                request.form.get("tag_name", ""),
+                actor.id,
+                source_type=source_type,
+                is_locked=(actor.role == "admin"),
+            )
+            flash("标签已添加。", "success")
+        except (ValueError, FileNotFoundError) as exc:
+            flash(str(exc), "error")
+        return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+
+    @app.post("/tags/remove")
+    def tag_remove_route() -> Any:
+        current_folder = request.form.get("folder", "")
+        query = request.form.get("q", "")
+        sort_by = request.form.get("sort", "date_desc")
+        show_done = parse_checkbox(request.form.get("show_done"))
+        rel_path = request.form.get("rel_path", "").strip("/")
+        tab = request.form.get("tab", "source")
+        actor = current_user()
+        if actor is None:
+            flash("请先登录。", "error")
+            return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+        try:
+            ensure_paper_metadata(rel_path)
+            tag_id = int(request.form.get("tag_id", "0") or 0)
+            app.team_store.remove_tag(rel_path, tag_id, is_admin=(actor.role == "admin"), acting_user_id=actor.id)  # type: ignore[attr-defined]
+            flash("标签已移除。", "success")
+        except (ValueError, FileNotFoundError, PermissionError) as exc:
+            flash(str(exc), "error")
+        return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+
+    @app.post("/import-link")
+    def import_link_route() -> Any:
+        current_folder = request.form.get("folder", "")
+        query = request.form.get("q", "")
+        sort_by = request.form.get("sort", "date_desc")
+        show_done = parse_checkbox(request.form.get("show_done"))
+        target = request.form.get("import_target", "")
+        recommendation_reason = request.form.get("recommendation_reason", "")
+        try:
+            result = import_remote_paper(target, recommendation_reason)
+            if result["status"] == "existing":
+                flash("论文已存在，已直接复用并记录推荐。", "success")
+            else:
+                flash("论文导入成功。", "success")
+                flash_submission_summary(result.get("submission", {}), action_label="导入后的自动 Prompt 已转为后台任务")
+            return redirect_to_index(current_folder, query, sort_by, result["rel_path"], "source", show_done=show_done)
+        except Exception as exc:
+            flash(f"导入失败：{exc}", "error")
+            return redirect_to_index(current_folder, query, sort_by, show_done=show_done)
 
     @app.post("/prompt-batch-run")
     def prompt_batch_run_route() -> Any:
@@ -1914,7 +2383,15 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 )
             )
 
-        submission = app.job_queue.submit(rel_paths, prompt_slugs, force=force, source="batch")  # type: ignore[attr-defined]
+        actor = current_user()
+        submission = app.job_queue.submit(  # type: ignore[attr-defined]
+            rel_paths,
+            prompt_slugs,
+            force=force,
+            source="batch",
+            requested_by_user_id=actor.id if actor else None,
+            requested_by_display_name=actor.display_name if actor else None,
+        )
         flash_submission_summary(submission, action_label="批量后台任务已提交")
         return redirect(
             url_for(

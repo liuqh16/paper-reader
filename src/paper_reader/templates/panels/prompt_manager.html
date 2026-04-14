@@ -1,4 +1,11 @@
 <div class="lazy-panel-body">
+  {% if not can_manage_prompts %}
+    <div class="library-box">
+      <span class="meta-label">权限</span>
+      <strong>核心 Prompt 仅管理员可编辑。</strong>
+      <p>你仍然可以在论文页面直接运行共享 Prompt 并复用团队已有结果。</p>
+    </div>
+  {% endif %}
   <div class="prompt-manager-grid">
     {% for prompt in all_prompts %}
       <details class="prompt-card prompt-editor" {% if loop.first %}open{% endif %}>
@@ -13,6 +20,7 @@
           </div>
         </summary>
         <form class="prompt-form" action="{{ url_for('prompt_save_route') }}" method="post">
+          <fieldset {% if not can_manage_prompts %}disabled{% endif %}>
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -43,6 +51,7 @@
           <div class="tool-actions split-actions">
             <button type="submit">保存 Prompt</button>
           </div>
+          </fieldset>
         </form>
         <form action="{{ url_for('prompt_delete_route') }}" method="post" class="inline-danger-form">
           <input type="hidden" name="folder" value="{{ current_folder }}">
@@ -52,7 +61,7 @@
           <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
           <input type="hidden" name="tab" value="{{ selected_tab }}">
           <input type="hidden" name="prompt_slug" value="{{ prompt.slug }}">
-          <button class="danger" type="submit" onclick="return confirm('确定要删除这个 Prompt 吗？已生成的 Markdown 结果文件不会自动删除。');">删除 Prompt</button>
+          <button class="danger" type="submit" onclick="return confirm('确定要删除这个 Prompt 吗？已生成的 Markdown 结果文件不会自动删除。');" {% if not can_manage_prompts %}disabled{% endif %}>删除 Prompt</button>
         </form>
       </details>
     {% else %}
@@ -70,6 +79,7 @@
         </div>
       </div>
       <form class="prompt-form" action="{{ url_for('prompt_save_route') }}" method="post">
+        <fieldset {% if not can_manage_prompts %}disabled{% endif %}>
         <input type="hidden" name="folder" value="{{ current_folder }}">
         <input type="hidden" name="q" value="{{ query }}">
         <input type="hidden" name="sort" value="{{ sort_by }}">
@@ -100,6 +110,7 @@
         <div class="tool-actions">
           <button type="submit">创建 Prompt</button>
         </div>
+        </fieldset>
       </form>
     </section>
   </div>

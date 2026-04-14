@@ -31,6 +31,8 @@ class JobRecord:
     model: str
     force: bool
     source: str
+    requested_by_user_id: int | None
+    requested_by_display_name: str | None
     status: str
     progress: int
     message: str
@@ -76,6 +78,12 @@ class PaperJobQueue:
 
         now = datetime.utcnow().isoformat(timespec="seconds")
         for item in payload.get("jobs", []):
+            if isinstance(item, dict):
+                item = {
+                    "requested_by_user_id": None,
+                    "requested_by_display_name": None,
+                    **item,
+                }
             try:
                 job = JobRecord(**item)
             except TypeError:
@@ -123,6 +131,8 @@ class PaperJobQueue:
         model: str,
         force: bool,
         source: str,
+        requested_by_user_id: int | None,
+        requested_by_display_name: str | None,
         status: str,
         progress: int,
         message: str,
@@ -139,6 +149,8 @@ class PaperJobQueue:
             model=model,
             force=force,
             source=source,
+            requested_by_user_id=requested_by_user_id,
+            requested_by_display_name=requested_by_display_name,
             status=status,
             progress=progress,
             message=message,
@@ -163,6 +175,8 @@ class PaperJobQueue:
         *,
         force: bool = False,
         source: str = "manual",
+        requested_by_user_id: int | None = None,
+        requested_by_display_name: str | None = None,
     ) -> dict[str, Any]:
         prompt_map = {prompt.slug: prompt for prompt in self.prompt_store.list_prompts()}
         result = {"queued": 0, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}
@@ -193,6 +207,8 @@ class PaperJobQueue:
                             model=prompt.model,
                             force=force,
                             source=source,
+                            requested_by_user_id=requested_by_user_id,
+                            requested_by_display_name=requested_by_display_name,
                             status="skipped",
                             progress=100,
                             message="结果已存在，未重复提交。",
@@ -211,6 +227,8 @@ class PaperJobQueue:
                         model=prompt.model,
                         force=force,
                         source=source,
+                        requested_by_user_id=requested_by_user_id,
+                        requested_by_display_name=requested_by_display_name,
                         status="queued",
                         progress=0,
                         message="任务已提交，等待处理。",
@@ -278,13 +296,18 @@ class PaperJobQueue:
                     else:
                         self._processes[job_id] = process
 
+            generate_kwargs: dict[str, Any] = {
+                "force": job.force,
+                "progress_callback": report,
+                "should_abort": lambda: self._is_cancelled(job_id),
+                "process_callback": process_callback,
+            }
+            if job.requested_by_user_id is not None:
+                generate_kwargs["triggered_by_user_id"] = job.requested_by_user_id
             result_path, generated = self.library.generate_prompt_result(
                 job.rel_path,
                 prompt,
-                force=job.force,
-                progress_callback=report,
-                should_abort=lambda: self._is_cancelled(job_id),
-                process_callback=process_callback,
+                **generate_kwargs,
             )
         except InterruptedError:
             self._mark_stopped(job_id)

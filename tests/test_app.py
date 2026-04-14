@@ -9,7 +9,7 @@ import time
 import unittest
 import zipfile
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from pypdf import PdfWriter
 
@@ -63,9 +63,14 @@ class PaperReaderAppTests(unittest.TestCase):
         self.app = create_app(self.library, source_archive_root=self.source_root)
         self.app.testing = True
         self.client = self.app.test_client()
+        admin_user = self.app.team_store.get_user_by_username("admin")
+        assert admin_user is not None
         with self.client.session_transaction() as session:
             session["authenticated"] = True
-            session["username"] = "admin"
+            session["user_id"] = admin_user.id
+            session["username"] = admin_user.username
+            session["display_name"] = admin_user.display_name
+            session["role"] = admin_user.role
 
     def tearDown(self) -> None:
         try:
@@ -95,7 +100,19 @@ class PaperReaderAppTests(unittest.TestCase):
             archive.writestr("word/document.xml", DOCX_DOC.format(title=title, body=body))
             archive.writestr("docProps/core.xml", DOCX_CORE.format(title=title))
 
+    def login_client_as(self, client, username: str) -> None:
+        user = self.app.team_store.get_user_by_username(username)
+        assert user is not None
+        with client.session_transaction() as session:
+            session["authenticated"] = True
+            session["user_id"] = user.id
+            session["username"] = user.username
+            session["display_name"] = user.display_name
+            session["role"] = user.role
+
     def create_prompt(self, slug: str, name: str) -> None:
+        admin_user = self.app.team_store.get_user_by_username("admin")
+        assert admin_user is not None
         self.app.prompt_store.save_prompt(
             existing_slug=None,
             name=name,
@@ -104,6 +121,7 @@ class PaperReaderAppTests(unittest.TestCase):
             model="gpt-5.4",
             enabled=True,
             auto_run=False,
+            created_by_user_id=admin_user.id,
         )
 
     def create_source_day(self, run_date: str, paper_id: str = "2604.08377", title: str = "SkillClaw") -> Path:
@@ -214,13 +232,6 @@ class PaperReaderAppTests(unittest.TestCase):
         app.testing = True
         client = app.test_client()
 
-        default_login = client.post(
-            "/login",
-            data={"username": "admin", "password": "paperpaperreaderreader12678", "next": "/"},
-            follow_redirects=True,
-        )
-        self.assertIn("用户名或密码错误", default_login.get_data(as_text=True))
-
         custom_login = client.post(
             "/login",
             data={"username": "reader", "password": "custom-secret-456", "next": "/"},
@@ -240,6 +251,134 @@ class PaperReaderAppTests(unittest.TestCase):
 
         self.assertEqual(values["PAPER_READER_LOGIN_USERNAME"], "reader")
         self.assertEqual(values["PAPER_READER_LOGIN_PASSWORD"], "secret")
+
+    def test_admin_can_create_member_user(self) -> None:
+        response = self.client.post(
+            "/team/users/save",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "paper": "",
+                "tab": "source",
+                "username": "alice",
+                "display_name": "Alice",
+                "password": "alice-pass-123",
+                "role": "member",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        created_user = self.app.team_store.get_user_by_username("alice")
+        self.assertIsNotNone(created_user)
+        self.assertEqual(created_user.role, "member")
+
+        login_client = self.app.test_client()
+        login = login_client.post(
+            "/login",
+            data={"username": "alice", "password": "alice-pass-123", "next": "/"},
+            follow_redirects=False,
+        )
+        self.assertEqual(login.status_code, 302)
+        self.assertEqual(login.headers["Location"], "/")
+
+    def test_member_cannot_edit_prompts(self) -> None:
+        self.app.team_store.create_user("alice", "Alice", "alice-pass-123", "member")
+        client = self.app.test_client()
+        self.login_client_as(client, "alice")
+
+        response = client.post(
+            "/prompt-save",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "paper": "",
+                "tab": "source",
+                "name": "方法拆解",
+                "slug": "method-breakdown",
+                "user_prompt": "请解释方法。",
+                "model": "gpt-5.4",
+                "enabled": "on",
+                "auto_run": "on",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("管理员权限", response.get_data(as_text=True))
+        self.assertIsNone(self.app.prompt_store.get_prompt("method-breakdown"))
+
+    def test_team_metadata_is_visible_and_searchable(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Robot Policy")
+        response = self.client.post(
+            "/recommend",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "show_done": "",
+                "rel_path": "paper.pdf",
+                "tab": "source",
+                "reason": "适合本周讨论。",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        response = self.client.post(
+            "/tags/add",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "show_done": "",
+                "rel_path": "paper.pdf",
+                "tab": "source",
+                "tag_name": "robotics",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        response = self.client.post(
+            "/like-toggle",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "show_done": "",
+                "rel_path": "paper.pdf",
+                "tab": "source",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        response = self.client.post(
+            "/comments",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "show_done": "",
+                "rel_path": "paper.pdf",
+                "tab": "source",
+                "body": "这个结果很适合组会分享。",
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("适合本周讨论", html)
+        self.assertIn("#robotics", html)
+        self.assertIn("这个结果很适合组会分享", html)
+        self.assertIn("1 个赞", html)
+
+        search_response = self.client.get("/?q=robotics")
+        self.assertIn("Robot Policy", search_response.get_data(as_text=True))
 
     def test_index_lists_existing_pdf_docx_and_default_prompt(self) -> None:
         self.make_pdf(self.library / "2501.12948.pdf", "DeepSeek-R1")
@@ -274,7 +413,14 @@ class PaperReaderAppTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertTrue((self.library / "arxiv" / "2025" / "paper.pdf").exists())
-        mocked.assert_called_once_with(["arxiv/2025/paper.pdf"], ["core-zh"], force=False, source="upload")
+        mocked.assert_called_once_with(
+            ["arxiv/2025/paper.pdf"],
+            ["core-zh"],
+            force=False,
+            source="upload",
+            requested_by_user_id=ANY,
+            requested_by_display_name="admin",
+        )
 
     def test_upload_file_endpoint_returns_json_for_single_success(self) -> None:
         upload_bytes = io.BytesIO()
@@ -301,7 +447,14 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertEqual(response.json["saved_rel_path"], "incoming/single.pdf")
         self.assertTrue(response.json["visible_in_current_view"])
         self.assertEqual(response.json["paper"]["file_name"], "single.pdf")
-        mocked.assert_called_once_with(["incoming/single.pdf"], ["core-zh"], force=False, source="upload")
+        mocked.assert_called_once_with(
+            ["incoming/single.pdf"],
+            ["core-zh"],
+            force=False,
+            source="upload",
+            requested_by_user_id=ANY,
+            requested_by_display_name="admin",
+        )
 
     def test_upload_file_endpoint_skips_duplicate_content(self) -> None:
         original = io.BytesIO(b"same-content")
@@ -354,7 +507,14 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue((self.library / "mixed" / "ok.pdf").exists())
         self.assertFalse((self.library / "mixed" / "bad.txt").exists())
-        mocked.assert_called_once_with(["mixed/ok.pdf"], ["core-zh"], force=False, source="upload")
+        mocked.assert_called_once_with(
+            ["mixed/ok.pdf"],
+            ["core-zh"],
+            force=False,
+            source="upload",
+            requested_by_user_id=ANY,
+            requested_by_display_name="admin",
+        )
 
     def test_prompt_save_route_creates_custom_prompt(self) -> None:
         response = self.client.post(
@@ -735,7 +895,7 @@ class PaperReaderAppTests(unittest.TestCase):
         existing_path.parent.mkdir(parents=True, exist_ok=True)
         existing_path.write_text("# Existing\n", encoding="utf-8")
 
-        with patch("src.paper_reader.app.run_prompt_on_document", side_effect=AssertionError("should not run")):
+        with patch("src.paper_reader.ai_summary.run_prompt_on_document", side_effect=AssertionError("should not run")):
             path, generated = self.app.library.generate_prompt_result("paper.pdf", prompt, force=False)
 
         self.assertFalse(generated)
@@ -801,7 +961,14 @@ class PaperReaderAppTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        mocked.assert_called_once_with(["paper.pdf"], ["core-zh", "method-breakdown"], force=False, source="batch")
+        mocked.assert_called_once_with(
+            ["paper.pdf"],
+            ["core-zh", "method-breakdown"],
+            force=False,
+            source="batch",
+            requested_by_user_id=ANY,
+            requested_by_display_name="admin",
+        )
 
     def test_prompt_run_route_submits_background_job(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Test Title")
@@ -820,7 +987,14 @@ class PaperReaderAppTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        mocked.assert_called_once_with(["paper.pdf"], ["core-zh"], force=False, source="manual")
+        mocked.assert_called_once_with(
+            ["paper.pdf"],
+            ["core-zh"],
+            force=False,
+            source="manual",
+            requested_by_user_id=ANY,
+            requested_by_display_name="admin",
+        )
 
     def test_serve_file_tolerates_zoom_fragment_encoded_in_path(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Zoom Safe")
@@ -1023,7 +1197,7 @@ class PaperReaderAppTests(unittest.TestCase):
         before = self.app.library.scan(force=True, include_done=True)
         self.assertNotIn("manual-done.pdf", [paper.file_name for paper in before.papers])
 
-        with patch("src.paper_reader.app.extract_document_metadata", side_effect=AssertionError("should not extract")):
+        with patch("src.paper_reader.document_utils.extract_document_metadata", side_effect=AssertionError("should not extract")):
             response = self.client.post(
                 "/reindex",
                 data={
@@ -1102,6 +1276,8 @@ class PaperReaderAppTests(unittest.TestCase):
             ["core-zh"],
             force=False,
             source="source-import",
+            requested_by_user_id=ANY,
+            requested_by_display_name="admin",
         )
 
     def test_render_markdown_supports_rule_and_blockquote(self) -> None:

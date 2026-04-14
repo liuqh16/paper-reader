@@ -1,0 +1,69 @@
+<div class="lazy-panel-body">
+  {% if not can_manage_team %}
+    <div class="library-box">
+      <span class="meta-label">权限</span>
+      <strong>团队成员管理仅管理员可操作。</strong>
+    </div>
+  {% else %}
+    <div class="prompt-manager-grid">
+      <section class="prompt-card new-prompt-card">
+        <div class="prompt-card-head">
+          <div>
+            <strong>创建团队成员</strong>
+            <span>MVP 只支持管理员手动创建账号</span>
+          </div>
+        </div>
+        <form class="prompt-form" action="{{ url_for('team_user_save_route') }}" method="post">
+          <input type="hidden" name="folder" value="{{ current_folder }}">
+          <input type="hidden" name="q" value="{{ query }}">
+          <input type="hidden" name="sort" value="{{ sort_by }}">
+          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+          <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
+          <input type="hidden" name="tab" value="{{ selected_tab }}">
+          <label>
+            <span>用户名</span>
+            <input type="text" name="username" placeholder="例如：alice">
+          </label>
+          <label>
+            <span>显示名</span>
+            <input type="text" name="display_name" placeholder="例如：Alice">
+          </label>
+          <label>
+            <span>初始密码</span>
+            <input type="password" name="password" placeholder="设置一个初始密码">
+          </label>
+          <label>
+            <span>角色</span>
+            <select name="role">
+              <option value="member">member</option>
+              <option value="admin">admin</option>
+            </select>
+          </label>
+          <div class="tool-actions">
+            <button type="submit">创建账号</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="prompt-card">
+        <div class="prompt-card-head">
+          <div>
+            <strong>当前成员</strong>
+            <span>{{ team_users|length }} 人</span>
+          </div>
+        </div>
+        <div class="team-note-list">
+          {% for user in team_users %}
+            <div class="team-note-item">
+              <strong>{{ user.display_name }}</strong>
+              <p>{{ user.username }} · {{ user.role }}</p>
+              <small>{{ user.created_at }}</small>
+            </div>
+          {% else %}
+            <p class="team-empty-copy">还没有团队成员。</p>
+          {% endfor %}
+        </div>
+      </section>
+    </div>
+  {% endif %}
+</div>
