@@ -23,10 +23,13 @@
   <body>
     <div class="page-shell">
       <header class="hero">
-        <div>
-          <p class="eyebrow">Paper Reader</p>
-          <h1><a href="{{ url_for('index') }}">论文阅读器</a></h1>
-          <p class="hero-copy">从个人阅读器升级到团队共享阅读器：上传、检索、推荐、评论，并复用共享 Prompt 结果。</p>
+        <div class="hero-brand">
+          <img class="app-logo" src="{{ url_for('static', filename='logo-mark.svg') }}" alt="Paper Reader logo">
+          <div>
+            <p class="eyebrow">Paper Reader</p>
+            <h1><a href="{{ url_for('index') }}">论文阅读器</a></h1>
+            <p class="hero-copy">从个人阅读器升级到团队共享阅读器：上传、检索、推荐、评论，并复用共享 Prompt 结果。</p>
+          </div>
         </div>
         {% if current_user %}
           <div class="hero-user-box">

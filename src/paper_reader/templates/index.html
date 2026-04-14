@@ -1,24 +1,51 @@
 {% extends 'base.html' %}
 {% block title %}论文阅读器{% endblock %}
 {% block content %}
-<section class="workspace-shell">
-  <aside class="sidebar-pane card">
-    <div class="sidebar-head">
-      <p class="eyebrow">Library</p>
-      <h2><span id="paper-count">{{ papers|length }}</span> 篇论文</h2>
-      <p class="sidebar-copy">左侧只保留紧凑信息，重点阅读区放在右侧。</p>
-      <form class="sidebar-toggle-form" action="{{ url_for('index') }}" method="get">
-        <input type="hidden" name="folder" value="{{ current_folder }}">
-        <input type="hidden" name="q" value="{{ query }}">
-        <input type="hidden" name="sort" value="{{ sort_by }}">
-        <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
-        <input type="hidden" name="tab" value="{{ selected_tab }}">
-        <label class="checkbox-line done-toggle-line">
-          <input type="checkbox" name="show_done" value="1" {% if show_done %}checked{% endif %} onchange="this.form.submit()">
-          显示 DONE 论文
-        </label>
-      </form>
+<section class="workspace-shell tri-workspace" data-layout-root>
+  <aside class="sidebar-pane card layout-pane pane-left" data-pane="left">
+    <div class="pane-top">
+      <div>
+        <p class="eyebrow">Navigate</p>
+        <h2><span id="paper-count">{{ papers|length }}</span> 篇论文</h2>
+        <p class="sidebar-copy">左侧用于导航和检索，中间区域优先用于阅读论文和核心解读。</p>
+      </div>
+      <button type="button" class="pane-toggle" data-toggle-pane="left" title="折叠左侧导航">折叠</button>
     </div>
+
+    <form class="nav-filter-form" action="{{ url_for('index') }}" method="get">
+      <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
+      <input type="hidden" name="tab" value="{{ selected_tab }}">
+      <label>
+        <span>搜索</span>
+        <input type="search" name="q" value="{{ query }}" placeholder="标题、标签、推荐人、来源">
+      </label>
+      <label>
+        <span>文件夹</span>
+        <select name="folder">
+          <option value="" {% if not current_folder %}selected{% endif %}>全部文件夹</option>
+          {% for folder in folders %}
+            {% if folder %}
+              <option value="{{ folder }}" {% if current_folder == folder %}selected{% endif %}>{{ folder }}</option>
+            {% endif %}
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>排序</span>
+        <select name="sort">
+          <option value="date_desc" {% if sort_by == 'date_desc' %}selected{% endif %}>日期从新到旧</option>
+          <option value="date_asc" {% if sort_by == 'date_asc' %}selected{% endif %}>日期从旧到新</option>
+          <option value="title" {% if sort_by == 'title' %}selected{% endif %}>按标题</option>
+        </select>
+      </label>
+      <label class="checkbox-line done-toggle-line">
+        <input type="checkbox" name="show_done" value="1" {% if show_done %}checked{% endif %}>
+        显示 DONE 论文
+      </label>
+      <div class="tool-actions nav-filter-actions">
+        <button type="submit">更新列表</button>
+      </div>
+    </form>
 
     {% if papers %}
       <div class="paper-tree-scroll" id="paper-tree-scroll">
@@ -78,26 +105,43 @@
     {% else %}
       <div class="compact-empty" id="paper-list-empty">
         <h3>没有匹配结果</h3>
-        <p>展开底部工具区后可以上传文件、建文件夹、管理 Prompt、DONE 状态或调整检索条件。</p>
+        <p>可以通过右上角圆形 logo 打开控制中心，导入或上传论文。</p>
       </div>
     {% endif %}
   </aside>
 
-  <section class="viewer-pane card">
-    {% if selected_paper %}
-      <div class="viewer-head">
-        <div>
-          <p class="eyebrow">Reader</p>
+  <div class="pane-resizer pane-resizer-left" data-resizer="left" aria-hidden="true"></div>
+
+  <section class="viewer-pane card layout-pane pane-center" data-pane="center">
+    <div class="viewer-toolbar">
+      <div class="viewer-toolbar-copy">
+        <p class="eyebrow">Reader</p>
+        {% if selected_paper %}
           <h2>{{ selected_paper.display_title }}</h2>
           <p class="viewer-subtitle">{{ selected_paper.file_name }}</p>
-        </div>
-        <div class="viewer-meta">
+        {% else %}
+          <h2>Team Reader</h2>
+          <p class="viewer-subtitle">左侧导航选论文，中间沉浸式阅读，右侧区域为未来 Chatbot 预留。</p>
+        {% endif %}
+      </div>
+      <div class="viewer-toolbar-actions">
+        <button type="button" class="secondary ghost-toggle" data-toggle-pane="left">左栏</button>
+        <button type="button" class="secondary ghost-toggle" data-toggle-pane="center">中栏</button>
+        <button type="button" class="secondary ghost-toggle" data-toggle-pane="right">右栏</button>
+      </div>
+    </div>
+
+    {% if selected_paper %}
+      <div class="viewer-head viewer-head-compact">
+        <div class="viewer-meta viewer-meta-inline">
           {% if selected_paper.extracted_date %}<span>{{ selected_paper.extracted_date }}</span>{% endif %}
           <span>{{ format_bytes(selected_paper.file_size) }}</span>
           <span>{{ selected_paper.prompt_result_count }}/{{ active_prompt_count }} 个 Prompt 已完成</span>
           <span>{{ selected_paper_context.recommendation_count }} 条推荐</span>
           <span>{{ selected_paper_context.like_count }} 个赞</span>
           <span>{{ selected_paper_context.comment_count }} 条评论</span>
+        </div>
+        <div class="viewer-meta-actions">
           <form action="{{ url_for('like_toggle_route') }}" method="post" class="inline-form">
             <input type="hidden" name="folder" value="{{ current_folder }}">
             <input type="hidden" name="q" value="{{ query }}">
@@ -116,101 +160,9 @@
             <input type="hidden" name="tab" value="{{ selected_tab }}">
             <button type="submit" class="secondary">{% if selected_paper.is_done %}恢复为未完成{% else %}标记 DONE{% endif %}</button>
           </form>
+          <button type="button" class="secondary ghost-toggle" data-toggle-pane="center">最小化阅读区</button>
         </div>
       </div>
-
-      <section class="team-paper-grid">
-        <article class="team-paper-card">
-          <div class="team-paper-card-head">
-            <strong>推荐</strong>
-            <span>{{ selected_paper_context.recommendation_count }} 条</span>
-          </div>
-          <div class="team-chip-list">
-            {% for recommendation in selected_paper_context.recommendations %}
-              <div class="team-note-item">
-                <strong>{{ recommendation.display_name }}</strong>
-                <p>{{ recommendation.reason }}</p>
-                <small>{{ recommendation.created_at }}</small>
-              </div>
-            {% else %}
-              <p class="team-empty-copy">还没有人写推荐理由。</p>
-            {% endfor %}
-          </div>
-          <form action="{{ url_for('recommend_route') }}" method="post" class="team-inline-form">
-            <input type="hidden" name="folder" value="{{ current_folder }}">
-            <input type="hidden" name="q" value="{{ query }}">
-            <input type="hidden" name="sort" value="{{ sort_by }}">
-            <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-            <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-            <input type="hidden" name="tab" value="{{ selected_tab }}">
-            <textarea name="reason" rows="3" placeholder="补充这篇论文为什么值得团队关注"></textarea>
-            <button type="submit">保存推荐理由</button>
-          </form>
-        </article>
-
-        <article class="team-paper-card">
-          <div class="team-paper-card-head">
-            <strong>标签</strong>
-            <span>{{ selected_paper_context.tags|length }} 个</span>
-          </div>
-          <div class="team-chip-list">
-            {% for tag in selected_paper_context.tags %}
-              <div class="team-tag-chip source-{{ tag.source_type }}">
-                <span>#{{ tag.name }}</span>
-                <small>{{ 'AI' if tag.source_type == 'auto' else ('官方' if tag.source_type == 'official' else '手动') }}</small>
-                {% if is_admin or (tag.source_type == 'manual' and current_user and current_user.display_name == tag.added_by_display_name) %}
-                  <form action="{{ url_for('tag_remove_route') }}" method="post" class="inline-form">
-                    <input type="hidden" name="folder" value="{{ current_folder }}">
-                    <input type="hidden" name="q" value="{{ query }}">
-                    <input type="hidden" name="sort" value="{{ sort_by }}">
-                    <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-                    <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-                    <input type="hidden" name="tab" value="{{ selected_tab }}">
-                    <input type="hidden" name="tag_id" value="{{ tag.id }}">
-                    <button type="submit" class="ghost-button">×</button>
-                  </form>
-                {% endif %}
-              </div>
-            {% else %}
-              <p class="team-empty-copy">系统还没有为这篇论文生成标签。</p>
-            {% endfor %}
-          </div>
-          <form action="{{ url_for('tag_add_route') }}" method="post" class="team-inline-form compact-form">
-            <input type="hidden" name="folder" value="{{ current_folder }}">
-            <input type="hidden" name="q" value="{{ query }}">
-            <input type="hidden" name="sort" value="{{ sort_by }}">
-            <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-            <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-            <input type="hidden" name="tab" value="{{ selected_tab }}">
-            <input type="text" name="tag_name" placeholder="添加标签，例如：diffusion / robotics">
-            <button type="submit">添加</button>
-          </form>
-        </article>
-
-        <article class="team-paper-card">
-          <div class="team-paper-card-head">
-            <strong>共享结果与来源</strong>
-            <span>{{ selected_paper_context.prompt_runs|length }} 条</span>
-          </div>
-          <div class="team-note-list">
-            {% for run in selected_paper_context.prompt_runs %}
-              <div class="team-note-item">
-                <strong>{{ run.prompt_name }}</strong>
-                <p>v{{ run.prompt_version }} · {{ run.model }}</p>
-                <small>{% if run.generated_by_display_name %}{{ run.generated_by_display_name }} · {% endif %}{{ run.generated_at or '已生成' }}</small>
-              </div>
-            {% else %}
-              <p class="team-empty-copy">这篇论文还没有共享 Prompt 结果记录。</p>
-            {% endfor %}
-            {% for source in selected_paper_context.sources %}
-              <div class="team-note-item muted-item">
-                <strong>{{ source.source_type }}</strong>
-                <p>{{ source.source_value }}</p>
-              </div>
-            {% endfor %}
-          </div>
-        </article>
-      </section>
 
       <div class="viewer-tabs">
         <a
@@ -240,131 +192,249 @@
         {% endfor %}
       </div>
 
-      {% if selected_tab == 'source' %}
-        {% if selected_paper.preview_kind == 'pdf' %}
-          <div class="source-viewer">
-            <div class="source-viewer-head">
-              <div>
-                <strong>源文件</strong>
-                <span>PDF 原文预览</span>
+      <div class="reader-stage" data-center-stage>
+        {% if selected_tab == 'source' %}
+          {% if selected_paper.preview_kind == 'pdf' %}
+            <div class="source-viewer">
+              <div class="source-viewer-head">
+                <div>
+                  <strong>源文件</strong>
+                  <span>中间区域优先保留给正文预览</span>
+                </div>
+                <div class="prompt-viewer-actions">
+                  <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
+                </div>
               </div>
-              <div class="prompt-viewer-actions">
-                <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
+              <iframe class="main-viewer" title="{{ selected_paper.display_title }}" src="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}"></iframe>
+            </div>
+          {% elif selected_paper.preview_kind == 'docx' %}
+            <div class="source-viewer source-text-viewer">
+              <div class="source-viewer-head">
+                <div>
+                  <strong>源文件</strong>
+                  <span>Word 文档预览</span>
+                </div>
+                <div class="prompt-viewer-actions">
+                  <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
+                </div>
+              </div>
+              <div class="source-viewer-body docx-preview wide">
+                {% for paragraph in preview_paragraphs %}
+                  <p>{{ paragraph }}</p>
+                {% else %}
+                  <p>没有提取到可预览的内容。</p>
+                {% endfor %}
               </div>
             </div>
-            <iframe class="main-viewer" title="{{ selected_paper.display_title }}" src="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}"></iframe>
-          </div>
-        {% elif selected_paper.preview_kind == 'docx' %}
-          <div class="source-viewer source-text-viewer">
-            <div class="source-viewer-head">
-              <div>
-                <strong>源文件</strong>
-                <span>Word 文档预览</span>
+          {% elif selected_paper.preview_kind == 'doc' %}
+            <div class="source-viewer source-text-viewer">
+              <div class="source-viewer-head">
+                <div>
+                  <strong>源文件</strong>
+                  <span>DOC 文件预览</span>
+                </div>
+                <div class="prompt-viewer-actions">
+                  <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
+                </div>
               </div>
-              <div class="prompt-viewer-actions">
-                <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
-              </div>
-            </div>
-            <div class="source-viewer-body docx-preview wide">
-              {% for paragraph in preview_paragraphs %}
-                <p>{{ paragraph }}</p>
-              {% else %}
-                <p>没有提取到可预览的内容。</p>
-              {% endfor %}
-            </div>
-          </div>
-        {% elif selected_paper.preview_kind == 'doc' %}
-          <div class="source-viewer source-text-viewer">
-            <div class="source-viewer-head">
-              <div>
-                <strong>源文件</strong>
-                <span>DOC 文件预览</span>
-              </div>
-              <div class="prompt-viewer-actions">
-                <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
+              <div class="source-viewer-body docx-preview wide">
+                <p>当前环境会索引 `.doc` 的标题和文件信息，但不能像 PDF / `.docx` 一样直接提取正文。</p>
               </div>
             </div>
-            <div class="source-viewer-body docx-preview wide">
-              <p>当前环境会索引 `.doc` 的标题和文件信息，但不能像 PDF / `.docx` 一样直接提取正文。</p>
-            </div>
-          </div>
-        {% else %}
-          <div class="viewer-empty source-viewer source-empty-viewer">
-            <div class="source-viewer-head">
-              <div>
-                <strong>源文件</strong>
-                <span>当前格式暂不支持内嵌预览</span>
+          {% else %}
+            <div class="viewer-empty source-viewer source-empty-viewer">
+              <div class="source-viewer-head">
+                <div>
+                  <strong>源文件</strong>
+                  <span>当前格式暂不支持内嵌预览</span>
+                </div>
+                <div class="prompt-viewer-actions">
+                  <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
+                </div>
               </div>
-              <div class="prompt-viewer-actions">
-                <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
-              </div>
+              <h3>当前格式暂不支持预览</h3>
+              <p>你仍然可以点击“打开原文件”查看原始文档。</p>
             </div>
-            <h3>当前格式暂不支持预览</h3>
-            <p>你仍然可以点击“打开原文件”查看原始文档。</p>
-          </div>
-        {% endif %}
-      {% elif selected_prompt %}
-        {% if selected_prompt_content %}
-          <div class="prompt-viewer">
-            <div class="prompt-viewer-head">
-              <div>
-                <strong>{{ selected_prompt.name }}</strong>
-                <span>
-                  {% if selected_prompt_info and selected_prompt_info.updated_at %}
-                    {{ selected_prompt_info.updated_at }}
-                  {% else %}
-                    已生成
+          {% endif %}
+        {% elif selected_prompt %}
+          {% if selected_prompt_content %}
+            <div class="prompt-viewer prompt-viewer-wide">
+              <div class="prompt-viewer-head">
+                <div>
+                  <strong>{{ selected_prompt.name }}</strong>
+                  <span>
+                    {% if selected_prompt_info and selected_prompt_info.updated_at %}
+                      {{ selected_prompt_info.updated_at }}
+                    {% else %}
+                      已生成
+                    {% endif %}
+                  </span>
+                </div>
+                <div class="prompt-viewer-actions">
+                  <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
+                  {% if selected_prompt_info and selected_prompt_info.result_rel_path %}
+                    <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_prompt_info.result_rel_path) }}" target="_blank" rel="noreferrer">打开 MD</a>
                   {% endif %}
-                </span>
+                  <form action="{{ url_for('prompt_run_route') }}" method="post" class="inline-form">
+                    <input type="hidden" name="folder" value="{{ current_folder }}">
+                    <input type="hidden" name="q" value="{{ query }}">
+                    <input type="hidden" name="sort" value="{{ sort_by }}">
+                    <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+                    <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+                    <input type="hidden" name="prompt_slug" value="{{ selected_prompt.slug }}">
+                    <input type="hidden" name="force" value="on">
+                    <button type="submit" class="secondary">重新运行</button>
+                  </form>
+                </div>
               </div>
-              <div class="prompt-viewer-actions">
-                <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
-                {% if selected_prompt_info and selected_prompt_info.result_rel_path %}
-                  <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_prompt_info.result_rel_path) }}" target="_blank" rel="noreferrer">打开 MD</a>
-                {% endif %}
-                <form action="{{ url_for('prompt_run_route') }}" method="post" class="inline-form">
+              <article class="markdown-viewer markdown-render">{{ selected_prompt_html }}</article>
+            </div>
+          {% else %}
+            <div class="viewer-empty prompt-empty-state">
+              <h3>{{ selected_prompt.name }}</h3>
+              <p>这个 Prompt 还没有应用到当前论文上，所以这里暂时是空的。</p>
+              {% if selected_prompt_job and selected_prompt_job.status in ['queued', 'running'] %}
+                <div class="inline-job-card" id="selected-prompt-job" data-job-id="{{ selected_prompt_job.id }}">
+                  <div class="job-card-top">
+                    <strong>{{ selected_prompt_job.prompt_name }}</strong>
+                    <span>{{ selected_prompt_job.status }}</span>
+                  </div>
+                  <div class="job-progress"><span style="width: {{ selected_prompt_job.progress }}%"></span></div>
+                  <p class="job-message">{{ selected_prompt_job.message }}</p>
+                </div>
+              {% endif %}
+              <form action="{{ url_for('prompt_run_route') }}" method="post" class="inline-form centered-form">
+                <input type="hidden" name="folder" value="{{ current_folder }}">
+                <input type="hidden" name="q" value="{{ query }}">
+                <input type="hidden" name="sort" value="{{ sort_by }}">
+                <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+                <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+                <input type="hidden" name="prompt_slug" value="{{ selected_prompt.slug }}">
+                <button type="submit">立即运行这个 Prompt</button>
+              </form>
+            </div>
+          {% endif %}
+        {% endif %}
+      </div>
+    {% else %}
+      <div class="viewer-empty reader-stage" data-center-stage>
+        <h3>还没有选中文件</h3>
+        <p>左边会显示论文列表，点击任意一篇即可在这里打开。</p>
+      </div>
+    {% endif %}
+  </section>
+
+  <div class="pane-resizer pane-resizer-right" data-resizer="right" aria-hidden="true"></div>
+
+  <aside class="assistant-pane card layout-pane pane-right" data-pane="right">
+    <div class="pane-top">
+      <div>
+        <p class="eyebrow">Assistant Dock</p>
+        <h2>Shared / Private Chat</h2>
+        <p class="sidebar-copy">右侧区域预留给未来 Chatbot。当前先承载团队协作信息与讨论。</p>
+      </div>
+      <button type="button" class="pane-toggle" data-toggle-pane="right" title="折叠右侧区域">折叠</button>
+    </div>
+
+    <div class="assistant-placeholder">
+      <img class="assistant-placeholder-logo" src="{{ url_for('static', filename='logo-mark.svg') }}" alt="Paper Reader logo">
+      <strong>Chatbot 区域预留中</strong>
+      <p>这里后续会接入 Shared Chat、Private Chat 和 `@bot`。现在先展示推荐、标签、共享结果与团队讨论。</p>
+    </div>
+
+    {% if selected_paper %}
+      <section class="assistant-card">
+        <div class="team-paper-card-head">
+          <strong>推荐</strong>
+          <span>{{ selected_paper_context.recommendation_count }} 条</span>
+        </div>
+        <div class="team-chip-list">
+          {% for recommendation in selected_paper_context.recommendations %}
+            <div class="team-note-item">
+              <strong>{{ recommendation.display_name }}</strong>
+              <p>{{ recommendation.reason }}</p>
+              <small>{{ recommendation.created_at }}</small>
+            </div>
+          {% else %}
+            <p class="team-empty-copy">还没有人写推荐理由。</p>
+          {% endfor %}
+        </div>
+        <form action="{{ url_for('recommend_route') }}" method="post" class="team-inline-form">
+          <input type="hidden" name="folder" value="{{ current_folder }}">
+          <input type="hidden" name="q" value="{{ query }}">
+          <input type="hidden" name="sort" value="{{ sort_by }}">
+          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+          <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+          <input type="hidden" name="tab" value="{{ selected_tab }}">
+          <textarea name="reason" rows="3" placeholder="补充这篇论文为什么值得团队关注"></textarea>
+          <button type="submit">保存推荐理由</button>
+        </form>
+      </section>
+
+      <section class="assistant-card">
+        <div class="team-paper-card-head">
+          <strong>标签</strong>
+          <span>{{ selected_paper_context.tags|length }} 个</span>
+        </div>
+        <div class="team-chip-list">
+          {% for tag in selected_paper_context.tags %}
+            <div class="team-tag-chip source-{{ tag.source_type }}">
+              <span>#{{ tag.name }}</span>
+              <small>{{ 'AI' if tag.source_type == 'auto' else ('官方' if tag.source_type == 'official' else '手动') }}</small>
+              {% if is_admin or (tag.source_type == 'manual' and current_user and current_user.display_name == tag.added_by_display_name) %}
+                <form action="{{ url_for('tag_remove_route') }}" method="post" class="inline-form">
                   <input type="hidden" name="folder" value="{{ current_folder }}">
                   <input type="hidden" name="q" value="{{ query }}">
                   <input type="hidden" name="sort" value="{{ sort_by }}">
                   <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
                   <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-                  <input type="hidden" name="prompt_slug" value="{{ selected_prompt.slug }}">
-                  <input type="hidden" name="force" value="on">
-                  <button type="submit" class="secondary">重新运行</button>
+                  <input type="hidden" name="tab" value="{{ selected_tab }}">
+                  <input type="hidden" name="tag_id" value="{{ tag.id }}">
+                  <button type="submit" class="ghost-button">×</button>
                 </form>
-              </div>
+              {% endif %}
             </div>
-            <article class="markdown-viewer markdown-render">{{ selected_prompt_html }}</article>
-          </div>
-        {% else %}
-          <div class="viewer-empty prompt-empty-state">
-            <h3>{{ selected_prompt.name }}</h3>
-            <p>这个 Prompt 还没有应用到当前论文上，所以这里暂时是空的。</p>
-            {% if selected_prompt_job and selected_prompt_job.status in ['queued', 'running'] %}
-              <div class="inline-job-card" id="selected-prompt-job" data-job-id="{{ selected_prompt_job.id }}">
-                <div class="job-card-top">
-                  <strong>{{ selected_prompt_job.prompt_name }}</strong>
-                  <span>{{ selected_prompt_job.status }}</span>
-                </div>
-                <div class="job-progress"><span style="width: {{ selected_prompt_job.progress }}%"></span></div>
-                <p class="job-message">{{ selected_prompt_job.message }}</p>
-              </div>
-            {% endif %}
-            <form action="{{ url_for('prompt_run_route') }}" method="post" class="inline-form centered-form">
-              <input type="hidden" name="folder" value="{{ current_folder }}">
-              <input type="hidden" name="q" value="{{ query }}">
-              <input type="hidden" name="sort" value="{{ sort_by }}">
-              <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-              <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-              <input type="hidden" name="prompt_slug" value="{{ selected_prompt.slug }}">
-              <button type="submit">立即运行这个 Prompt</button>
-            </form>
-          </div>
-        {% endif %}
+          {% else %}
+            <p class="team-empty-copy">系统还没有为这篇论文生成标签。</p>
+          {% endfor %}
+        </div>
+        <form action="{{ url_for('tag_add_route') }}" method="post" class="team-inline-form compact-form">
+          <input type="hidden" name="folder" value="{{ current_folder }}">
+          <input type="hidden" name="q" value="{{ query }}">
+          <input type="hidden" name="sort" value="{{ sort_by }}">
+          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+          <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+          <input type="hidden" name="tab" value="{{ selected_tab }}">
+          <input type="text" name="tag_name" placeholder="添加标签，例如：diffusion / robotics">
+          <button type="submit">添加</button>
+        </form>
+      </section>
 
-      {% endif %}
+      <section class="assistant-card">
+        <div class="team-paper-card-head">
+          <strong>共享结果与来源</strong>
+          <span>{{ selected_paper_context.prompt_runs|length }} 条</span>
+        </div>
+        <div class="team-note-list">
+          {% for run in selected_paper_context.prompt_runs %}
+            <div class="team-note-item">
+              <strong>{{ run.prompt_name }}</strong>
+              <p>v{{ run.prompt_version }} · {{ run.model }}</p>
+              <small>{% if run.generated_by_display_name %}{{ run.generated_by_display_name }} · {% endif %}{{ run.generated_at or '已生成' }}</small>
+            </div>
+          {% else %}
+            <p class="team-empty-copy">这篇论文还没有共享 Prompt 结果记录。</p>
+          {% endfor %}
+          {% for source in selected_paper_context.sources %}
+            <div class="team-note-item muted-item">
+              <strong>{{ source.source_type }}</strong>
+              <p>{{ source.source_value }}</p>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
 
-      <section class="team-discussion-card">
+      <section class="assistant-card discussion-card">
         <div class="team-paper-card-head">
           <strong>团队讨论</strong>
           <span>{{ selected_paper_context.comment_count }} 条</span>
@@ -414,24 +484,34 @@
         </div>
       </section>
     {% else %}
-      <div class="viewer-empty">
-        <h3>还没有选中文件</h3>
-        <p>左边会显示论文列表，点击任意一篇即可在这里打开。</p>
+      <div class="assistant-empty">
+        <strong>还没有选中文件</strong>
+        <p>右侧区域会在未来承接 Shared Chat / Private Chat，并在当前展示团队协作上下文。</p>
       </div>
     {% endif %}
-  </section>
+  </aside>
 </section>
 
-<section class="bottom-tools card">
-  <div class="tools-head">
+<button type="button" id="settings-orb" class="settings-orb" title="打开控制中心" aria-label="打开控制中心">
+  <img src="{{ url_for('static', filename='logo-mark.svg') }}" alt="Paper Reader logo">
+</button>
+
+<section class="bottom-tools card settings-drawer" id="settings-drawer" data-settings-drawer>
+  <div class="tools-head settings-head">
     <div>
-      <p class="eyebrow">Tools</p>
-      <h2>附加功能</h2>
-      <p class="sidebar-copy">检索、上传、文件管理、Prompt 管理和历史批处理都折叠在下方。</p>
+      <p class="eyebrow">Control Center</p>
+      <h2>管理与导入</h2>
+      <p class="sidebar-copy">点击右上角圆形 logo 展开这个控制中心。上传、导入、Prompt 管理和团队设置都收纳在这里。</p>
     </div>
     <div class="tools-head-actions">
+      <button type="button" class="button-link secondary" data-close-settings>关闭面板</button>
       <a class="button-link secondary" href="{{ url_for('sources_index') }}" target="_blank" rel="noreferrer">打开 Sources 页面</a>
     </div>
+  </div>
+  <div class="drawer-quick-actions">
+    <button type="button" class="secondary ghost-toggle" data-toggle-pane="left">切换左栏</button>
+    <button type="button" class="secondary ghost-toggle" data-toggle-pane="center">切换中栏</button>
+    <button type="button" class="secondary ghost-toggle" data-toggle-pane="right">切换右栏</button>
   </div>
 
   <details class="tool-panel">
@@ -748,6 +828,145 @@
       const sortBy = "{{ sort_by }}";
       const currentFolder = "{{ current_folder }}";
       const currentQuery = "{{ query }}";
+      const layoutRoot = document.querySelector("[data-layout-root]");
+      const centerStage = document.querySelector("[data-center-stage]");
+      const settingsOrb = document.getElementById("settings-orb");
+      const settingsDrawer = document.querySelector("[data-settings-drawer]");
+      const closeSettingsButton = settingsDrawer ? settingsDrawer.querySelector("[data-close-settings]") : null;
+      const paneToggleButtons = Array.from(document.querySelectorAll("[data-toggle-pane]"));
+      const paneResizers = Array.from(document.querySelectorAll("[data-resizer]"));
+      const layoutStateKey = "paper-reader-layout-v3";
+      const defaultLayoutState = {
+        leftWidth: 280,
+        rightWidth: 360,
+        leftCollapsed: false,
+        centerCollapsed: false,
+        rightCollapsed: false,
+        settingsOpen: false,
+      };
+      let layoutState = loadLayoutState();
+
+      function loadLayoutState() {
+        try {
+          const parsed = JSON.parse(window.localStorage.getItem(layoutStateKey) || "{}");
+          return {
+            ...defaultLayoutState,
+            ...parsed,
+          };
+        } catch (error) {
+          return { ...defaultLayoutState };
+        }
+      }
+
+      function persistLayoutState() {
+        window.localStorage.setItem(layoutStateKey, JSON.stringify(layoutState));
+      }
+
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
+      }
+
+      function applyLayoutState() {
+        if (!layoutRoot) return;
+        layoutRoot.style.setProperty("--left-pane-width", layoutState.leftCollapsed ? "0px" : `${layoutState.leftWidth}px`);
+        layoutRoot.style.setProperty("--right-pane-width", layoutState.rightCollapsed ? "0px" : `${layoutState.rightWidth}px`);
+        layoutRoot.style.setProperty("--left-resizer-width", layoutState.leftCollapsed ? "0px" : "10px");
+        layoutRoot.style.setProperty("--right-resizer-width", layoutState.rightCollapsed ? "0px" : "10px");
+        layoutRoot.classList.toggle("left-collapsed", layoutState.leftCollapsed);
+        layoutRoot.classList.toggle("center-collapsed", layoutState.centerCollapsed);
+        layoutRoot.classList.toggle("right-collapsed", layoutState.rightCollapsed);
+        document.body.classList.toggle("settings-open", layoutState.settingsOpen);
+        if (centerStage) {
+          centerStage.hidden = layoutState.centerCollapsed;
+        }
+        if (settingsOrb) {
+          settingsOrb.setAttribute("aria-expanded", layoutState.settingsOpen ? "true" : "false");
+        }
+      }
+
+      function updatePaneState(pane, nextValue) {
+        if (pane === "left") layoutState.leftCollapsed = nextValue;
+        if (pane === "center") layoutState.centerCollapsed = nextValue;
+        if (pane === "right") layoutState.rightCollapsed = nextValue;
+        applyLayoutState();
+        persistLayoutState();
+      }
+
+      function togglePane(pane) {
+        if (pane === "left") updatePaneState("left", !layoutState.leftCollapsed);
+        if (pane === "center") updatePaneState("center", !layoutState.centerCollapsed);
+        if (pane === "right") updatePaneState("right", !layoutState.rightCollapsed);
+      }
+
+      function setSettingsOpen(nextValue) {
+        layoutState.settingsOpen = nextValue;
+        applyLayoutState();
+        persistLayoutState();
+      }
+
+      paneToggleButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          togglePane(button.dataset.togglePane || "left");
+        });
+      });
+
+      if (settingsOrb) {
+        settingsOrb.addEventListener("click", () => {
+          setSettingsOpen(!layoutState.settingsOpen);
+        });
+      }
+      if (closeSettingsButton) {
+        closeSettingsButton.addEventListener("click", () => setSettingsOpen(false));
+      }
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && layoutState.settingsOpen) {
+          setSettingsOpen(false);
+        }
+      });
+      document.addEventListener("click", (event) => {
+        if (!layoutState.settingsOpen || !settingsDrawer || !settingsOrb) return;
+        const target = event.target;
+        if (!(target instanceof Node)) return;
+        if (settingsDrawer.contains(target) || settingsOrb.contains(target)) return;
+        setSettingsOpen(false);
+      });
+
+      function bindPaneResizer(handle) {
+        if (!layoutRoot || !handle) return;
+        const side = handle.dataset.resizer;
+        handle.addEventListener("pointerdown", (event) => {
+          if (side === "left" && layoutState.leftCollapsed) return;
+          if (side === "right" && layoutState.rightCollapsed) return;
+          event.preventDefault();
+          const startX = event.clientX;
+          const bounds = layoutRoot.getBoundingClientRect();
+          const startLeft = layoutState.leftWidth;
+          const startRight = layoutState.rightWidth;
+
+          function onMove(moveEvent) {
+            if (side === "left") {
+              const maxWidth = Math.max(260, Math.floor(bounds.width * 0.36));
+              layoutState.leftWidth = clamp(startLeft + (moveEvent.clientX - startX), 220, maxWidth);
+            } else {
+              const maxWidth = Math.max(320, Math.floor(bounds.width * 0.4));
+              layoutState.rightWidth = clamp(startRight - (moveEvent.clientX - startX), 280, maxWidth);
+            }
+            applyLayoutState();
+          }
+
+          function onUp() {
+            window.removeEventListener("pointermove", onMove);
+            window.removeEventListener("pointerup", onUp);
+            persistLayoutState();
+          }
+
+          window.addEventListener("pointermove", onMove);
+          window.addEventListener("pointerup", onUp);
+        });
+      }
+
+      paneResizers.forEach(bindPaneResizer);
+      applyLayoutState();
 
       function escapeHtml(value) {
         return String(value || "").replace(/[&<>"']/g, (char) => ({
