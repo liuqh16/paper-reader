@@ -500,18 +500,24 @@
     {% endif %}
   </aside>
   <button type="button" class="pane-restore-rail pane-restore-left" data-restore-pane="left" data-toggle-pane="left" title="展开左栏" aria-label="展开左栏">
-    <span class="icon-shell" aria-hidden="true">
+    <span class="pane-restore-glyph" aria-hidden="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M15 7L9 12l6 5"></path>
+        <rect x="4" y="5" width="16" height="14" rx="3"></rect>
+        <path d="M10 5v14"></path>
+        <path d="M16 8.5L12.5 12 16 15.5"></path>
       </svg>
     </span>
+    <span class="sr-only">展开左栏</span>
   </button>
   <button type="button" class="pane-restore-rail pane-restore-right" data-restore-pane="right" data-toggle-pane="right" title="展开右栏" aria-label="展开右栏">
-    <span class="icon-shell" aria-hidden="true">
+    <span class="pane-restore-glyph" aria-hidden="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M9 7l6 5-6 5"></path>
+        <rect x="4" y="5" width="16" height="14" rx="3"></rect>
+        <path d="M14 5v14"></path>
+        <path d="M8 8.5L11.5 12 8 15.5"></path>
       </svg>
     </span>
+    <span class="sr-only">展开右栏</span>
   </button>
 </section>
 
@@ -551,14 +557,14 @@
       <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
       <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
       <input type="hidden" name="tab" value="{{ selected_tab }}">
-      <button type="submit" class="icon-button workspace-dock-button {% if selected_paper_context.liked_by_current_user %}is-accent{% endif %}" title="{% if selected_paper_context.liked_by_current_user %}取消点赞{% else %}点赞{% endif %}" aria-label="{% if selected_paper_context.liked_by_current_user %}取消点赞{% else %}点赞{% endif %}">
+      <button type="submit" class="icon-button workspace-dock-button workspace-like-button {% if selected_paper_context.liked_by_current_user %}is-accent{% endif %}" title="{% if selected_paper_context.liked_by_current_user %}取消点赞{% else %}点赞{% endif %}" aria-label="{% if selected_paper_context.liked_by_current_user %}取消点赞{% else %}点赞{% endif %}">
         <span class="icon-shell" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 20s-7-4.35-7-9.5S8.12 3 12 7c3.88-4 7 0.15 7 3.5S12 20 12 20Z"></path>
           </svg>
         </span>
-        <span class="icon-badge">{{ selected_paper_context.like_count }}</span>
-        <span class="sr-only">点赞</span>
+        <span class="workspace-like-count" aria-hidden="true">{{ selected_paper_context.like_count }}</span>
+        <span class="sr-only">点赞 {{ selected_paper_context.like_count }}</span>
       </button>
     </form>
     <form action="{{ url_for('done_toggle_route') }}" method="post" class="inline-form workspace-dock-form">

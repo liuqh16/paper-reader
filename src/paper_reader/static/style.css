@@ -1606,15 +1606,28 @@ button:disabled,
 .pane-restore-rail {
   position: absolute;
   top: 50%;
-  width: 36px;
-  height: 68px;
+  width: 44px;
+  height: 72px;
   padding: 0;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.94);
+  border-radius: 22px;
+  border: 1px solid rgba(29, 78, 216, 0.14);
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--brand-deep);
   box-shadow: 0 14px 28px rgba(15, 23, 42, 0.12);
   transform: translateY(-50%);
   z-index: 8;
   display: none;
+}
+.pane-restore-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+.pane-restore-glyph svg {
+  width: 24px;
+  height: 24px;
 }
 .pane-restore-left { left: 8px; }
 .pane-restore-right { right: 8px; }
@@ -1675,6 +1688,28 @@ button:disabled,
 .workspace-dock-button .icon-shell svg {
   width: 16px;
   height: 16px;
+}
+.workspace-like-button {
+  width: auto;
+  min-width: 62px;
+  padding: 0 12px;
+  gap: 7px;
+}
+.workspace-like-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  font-size: 0.74rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.workspace-like-button .icon-shell {
+  width: 16px;
+  height: 16px;
+}
+.workspace-like-button.is-accent .workspace-like-count {
+  color: var(--brand);
 }
 .settings-orb {
   position: fixed;
@@ -1893,6 +1928,11 @@ body.settings-open .settings-drawer {
     width: 48px;
     height: 48px;
   }
+  .workspace-like-button {
+    width: auto;
+    min-width: 62px;
+    padding: 0 12px;
+  }
   .team-paper-grid { grid-template-columns: 1fr; }
   .sidebar-pane { max-height: none; }
   .viewer-pane { min-height: auto; }
@@ -1981,6 +2021,10 @@ body.settings-open .settings-drawer {
     right: 10px;
     bottom: 82px;
     gap: 6px;
+  }
+  .workspace-like-button {
+    min-width: 58px;
+    padding: 0 10px;
   }
   .drawer-quick-actions-icons .icon-button {
     width: 100%;

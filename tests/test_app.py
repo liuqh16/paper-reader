@@ -633,6 +633,8 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("把屏幕优先留给论文分析、推荐和讨论。", html)
         self.assertIn("workspace-orbit-dock", html)
+        self.assertIn("workspace-like-button", html)
+        self.assertIn("pane-restore-glyph", html)
         self.assertIn('role="toolbar"', html)
         self.assertIn("pane-restore-rail", html)
         self.assertIn('aria-controls="settings-drawer"', html)
