@@ -4,7 +4,7 @@ import re
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -711,8 +711,6 @@ class TeamStore:
 
     def add_recommendation(self, rel_path: str, user_id: int, reason: str) -> None:
         reason = reason.strip()
-        if not reason:
-            raise ValueError("推荐理由不能为空。")
         with self._write_lock:
             with self._connect() as conn:
                 paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
@@ -729,6 +727,26 @@ class TeamStore:
                     """,
                     (paper_id, user_id, reason, now, now),
                 )
+
+    def toggle_recommendation(self, rel_path: str, user_id: int) -> bool:
+        with self._write_lock:
+            with self._connect() as conn:
+                paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+                if paper_id is None:
+                    raise FileNotFoundError(rel_path)
+                row = conn.execute(
+                    "SELECT id FROM paper_recommendations WHERE paper_id = ? AND user_id = ?",
+                    (paper_id, user_id),
+                ).fetchone()
+                if row is None:
+                    now = self._timestamp()
+                    conn.execute(
+                        "INSERT INTO paper_recommendations(paper_id, user_id, reason, created_at, updated_at) VALUES (?, ?, '', ?, ?)",
+                        (paper_id, user_id, now, now),
+                    )
+                    return True
+                conn.execute("DELETE FROM paper_recommendations WHERE id = ?", (int(row["id"]),))
+                return False
 
     def toggle_like(self, rel_path: str, user_id: int) -> bool:
         with self._write_lock:
@@ -1074,6 +1092,7 @@ class TeamStore:
                     "comments": [],
                     "like_count": 0,
                     "liked_by_current_user": False,
+                    "recommended_by_current_user": False,
                     "recommendation_count": 0,
                     "comment_count": 0,
                     "prompt_runs": [],
@@ -1127,9 +1146,14 @@ class TeamStore:
                 conn.execute("SELECT COUNT(*) FROM paper_likes WHERE paper_id = ?", (paper_id,)).fetchone()[0]
             )
             liked_by_current_user = False
+            recommended_by_current_user = False
             if current_user_id is not None:
                 liked_by_current_user = conn.execute(
                     "SELECT 1 FROM paper_likes WHERE paper_id = ? AND user_id = ?",
+                    (paper_id, current_user_id),
+                ).fetchone() is not None
+                recommended_by_current_user = conn.execute(
+                    "SELECT 1 FROM paper_recommendations WHERE paper_id = ? AND user_id = ?",
                     (paper_id, current_user_id),
                 ).fetchone() is not None
             prompt_runs = [
@@ -1172,11 +1196,66 @@ class TeamStore:
             "comments": comments,
             "like_count": like_count,
             "liked_by_current_user": liked_by_current_user,
+            "recommended_by_current_user": recommended_by_current_user,
             "recommendation_count": len(recommendations),
             "comment_count": len(list(flatten_comments(comments))),
             "prompt_runs": prompt_runs,
             "sources": sources,
         }
+
+    def recent_recommendation_feed(self, *, limit: int = 5, window_days: int = 14) -> list[dict[str, Any]]:
+        cutoff = (datetime.utcnow() - timedelta(days=max(1, int(window_days)))).isoformat(timespec="seconds")
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                WITH recommendation_counts AS (
+                    SELECT paper_id, COUNT(*) AS recommendation_count, MAX(updated_at) AS latest_recommendation_at
+                    FROM paper_recommendations
+                    GROUP BY paper_id
+                ),
+                like_counts AS (
+                    SELECT paper_id, COUNT(*) AS like_count, MAX(created_at) AS latest_like_at
+                    FROM paper_likes
+                    GROUP BY paper_id
+                ),
+                recent_activity AS (
+                    SELECT paper_id, MAX(activity_at) AS latest_activity
+                    FROM (
+                        SELECT paper_id, updated_at AS activity_at FROM paper_recommendations WHERE updated_at >= ?
+                        UNION ALL
+                        SELECT paper_id, created_at AS activity_at FROM paper_likes WHERE created_at >= ?
+                    ) recent_rows
+                    GROUP BY paper_id
+                )
+                SELECT p.rel_path, p.display_title, p.file_name, p.extracted_date,
+                       COALESCE(rc.recommendation_count, 0) AS recommendation_count,
+                       COALESCE(lc.like_count, 0) AS like_count,
+                       recent_activity.latest_activity
+                FROM recent_activity
+                JOIN papers p ON p.id = recent_activity.paper_id
+                LEFT JOIN recommendation_counts rc ON rc.paper_id = p.id
+                LEFT JOIN like_counts lc ON lc.paper_id = p.id
+                WHERE p.is_done = 0
+                ORDER BY COALESCE(rc.recommendation_count, 0) DESC,
+                         COALESCE(lc.like_count, 0) DESC,
+                         recent_activity.latest_activity DESC,
+                         LOWER(p.display_title) ASC
+                LIMIT ?
+                """,
+                (cutoff, cutoff, max(1, int(limit))),
+            ).fetchall()
+        return [
+            {
+                "rel_path": str(row["rel_path"]),
+                "display_title": str(row["display_title"]),
+                "file_name": str(row["file_name"]),
+                "extracted_date": (str(row["extracted_date"]) if row["extracted_date"] else None),
+                "recommendation_count": int(row["recommendation_count"]),
+                "like_count": int(row["like_count"]),
+                "latest_activity": str(row["latest_activity"]),
+            }
+            for row in rows
+        ]
 
     def record_prompt_run(
         self,

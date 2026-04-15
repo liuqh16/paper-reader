@@ -433,7 +433,6 @@ class PaperReaderAppTests(unittest.TestCase):
                 "show_done": "",
                 "rel_path": "paper.pdf",
                 "tab": "source",
-                "reason": "适合本周讨论。",
             },
             follow_redirects=True,
         )
@@ -484,9 +483,9 @@ class PaperReaderAppTests(unittest.TestCase):
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("适合本周讨论", html)
+        self.assertIn("1 人推荐", html)
         self.assertIn("#robotics", html)
-        self.assertIn("这个结果很适合组会分享", html)
+        self.assertIn("1 条评论", html)
         self.assertIn("1 个赞", html)
 
         search_response = self.client.get("/?q=robotics")
@@ -550,8 +549,8 @@ class PaperReaderAppTests(unittest.TestCase):
         admin_html = self.client.get("/?paper=paper.pdf&tab=source").get_data(as_text=True)
         self.assertIn("团队共享回答", admin_html)
         self.assertIn("私人回答", admin_html)
-        self.assertIn("共享聊天", admin_html)
-        self.assertIn("私人聊天", admin_html)
+        self.assertIn("一起学", admin_html)
+        self.assertIn("我爱学", admin_html)
 
         alice_html = alice_client.get("/?paper=paper.pdf&tab=source").get_data(as_text=True)
         self.assertIn("团队共享回答", alice_html)
@@ -562,6 +561,88 @@ class PaperReaderAppTests(unittest.TestCase):
         context_payload = context_response.get_json()
         assert context_payload is not None
         self.assertIn("团队共享回答", str(context_payload["shared"]))
+
+    def test_team_shared_chat_renders_markdown_for_multiple_users(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Team Chat Paper")
+        self.app.team_store.create_user("alice", "Alice", "alice-pass-123", "member")
+        self.app.team_store.create_user("bob", "Bob", "bob-pass-123", "member")
+        alice_client = self.app.test_client()
+        bob_client = self.app.test_client()
+        self.login_client_as(alice_client, "alice")
+        self.login_client_as(bob_client, "bob")
+
+        def complete_chat(**kwargs):
+            self.app.team_store.update_chat_message(
+                kwargs["assistant_message_id"],
+                body=f"**Paper Bot 回复**\n- 面向 {kwargs['display_name']}\n- 渠道 {kwargs['visibility']}",
+                status="completed",
+                model="gpt-5.4",
+            )
+
+        with patch.object(self.app.chat_queue, "submit", side_effect=complete_chat):
+            alice_shared = alice_client.post(
+                "/chat/send",
+                data={
+                    "folder": "",
+                    "q": "",
+                    "sort": "date_desc",
+                    "show_done": "",
+                    "rel_path": "paper.pdf",
+                    "tab": "source",
+                    "visibility": "shared",
+                    "body": "Alice 的共享问题",
+                },
+                headers={"X-Requested-With": "fetch"},
+            )
+            bob_shared = bob_client.post(
+                "/chat/send",
+                data={
+                    "folder": "",
+                    "q": "",
+                    "sort": "date_desc",
+                    "show_done": "",
+                    "rel_path": "paper.pdf",
+                    "tab": "source",
+                    "visibility": "shared",
+                    "body": "Bob 的共享问题",
+                },
+                headers={"X-Requested-With": "fetch"},
+            )
+            alice_private = alice_client.post(
+                "/chat/send",
+                data={
+                    "folder": "",
+                    "q": "",
+                    "sort": "date_desc",
+                    "show_done": "",
+                    "rel_path": "paper.pdf",
+                    "tab": "source",
+                    "visibility": "private",
+                    "body": "Alice 的私有问题",
+                },
+                headers={"X-Requested-With": "fetch"},
+            )
+
+        self.assertEqual(alice_shared.status_code, 200)
+        self.assertEqual(bob_shared.status_code, 200)
+        self.assertEqual(alice_private.status_code, 200)
+
+        alice_html = alice_client.get("/?paper=paper.pdf&tab=source").get_data(as_text=True)
+        bob_html = bob_client.get("/?paper=paper.pdf&tab=source").get_data(as_text=True)
+        alice_context = alice_client.get("/chat/context?paper=paper.pdf").get_json()
+        bob_context = bob_client.get("/chat/context?paper=paper.pdf").get_json()
+
+        assert alice_context is not None
+        assert bob_context is not None
+        self.assertIn("Alice 的共享问题", bob_html)
+        self.assertIn("Bob 的共享问题", bob_html)
+        self.assertIn("<strong>Paper Bot 回复</strong>", bob_html)
+        self.assertIn("Alice 的私有问题", alice_html)
+        self.assertNotIn("Alice 的私有问题", bob_html)
+        self.assertIn("body_html", str(bob_context["shared"]))
+        self.assertIn("<strong>Paper Bot 回复</strong>", str(bob_context["shared"]))
+        self.assertIn("Alice 的私有问题", str(alice_context["private"]))
+        self.assertNotIn("Alice 的私有问题", str(bob_context["private"]))
 
     def test_chat_send_route_returns_pending_context_for_async_polling(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Async Chat Paper")
@@ -902,12 +983,22 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn('aria-hidden="true"', html)
         self.assertIn('aria-label="折叠阅读区"', html)
         self.assertIn("settings-user-card", html)
-        self.assertIn('data-collapsible-toggle="tags"', html)
-        self.assertIn('data-collapsible-body="tags"', html)
+        self.assertIn('data-collapsible-toggle="tags-inline"', html)
+        self.assertIn('data-collapsible-body="tags-inline"', html)
         self.assertIn("data-chat-form", html)
-        self.assertIn("打开这篇论文后，推荐、标签、讨论和聊天都会集中显示在这里。", html)
-        self.assertIn("这里会显示大家围绕这篇论文的聊天记录；只要打开这篇论文，所有人都能看到。", html)
-        self.assertIn("发到共享聊天", html)
+        self.assertIn("推荐列表与论文索引", html)
+        self.assertIn("右边只显示一个聊天区域；点“我爱学”或“一起学”时，会直接切换到对应那一块。", html)
+        self.assertIn('data-chat-switch="private"', html)
+        self.assertIn('data-chat-panel="private"', html)
+        self.assertIn('data-chat-panel="shared"', html)
+        self.assertIn('id="chat-shared" hidden', html)
+        self.assertIn("加入推荐列表", html)
+        self.assertIn("发到一起学", html)
+        self.assertIn("compact-tag-toggle", html)
+        self.assertIn("原文阅读", html)
+        self.assertNotIn("<strong>讨论</strong>", html)
+        self.assertNotIn("把想法记在这里，后面的人能接着看", html)
+        self.assertNotIn('name="reason"', html)
         self.assertNotIn("团队视角", html)
 
     def test_workspace_styles_support_dragging_and_mobile_collapses(self) -> None:
@@ -915,7 +1006,7 @@ class PaperReaderAppTests(unittest.TestCase):
 
         self.assertIn("touch-action: none;", css)
         self.assertIn(
-            ".workspace-shell.center-collapsed .viewer-head-flat,\n.workspace-shell.center-collapsed .viewer-tabs,\n.workspace-shell.center-collapsed [data-center-stage] {\n  display: none;",
+            ".workspace-shell.center-collapsed .viewer-head-flat,\n.workspace-shell.center-collapsed .viewer-inline-tags-panel,\n.workspace-shell.center-collapsed .viewer-tabs,\n.workspace-shell.center-collapsed [data-center-stage] {\n  display: none;",
             css,
         )
         self.assertIn(

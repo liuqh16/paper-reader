@@ -5,9 +5,9 @@
   <aside class="sidebar-pane card layout-pane pane-left" data-pane="left">
     <div class="pane-top pane-top-compact">
       <div>
-        <p class="eyebrow">Navigate</p>
-        <h2><span id="paper-count">{{ papers|length }}</span> 篇论文</h2>
-        <p class="sidebar-copy">导航、检索与分组浏览。</p>
+        <p class="eyebrow">左栏</p>
+        <h2>推荐列表与论文索引</h2>
+        <p class="sidebar-copy">上面先看最近更值得翻的论文，下面再查找和打开具体文章。</p>
       </div>
       <button type="button" class="icon-button pane-toggle" data-pane-button="left" data-toggle-pane="left" title="折叠左栏" aria-label="折叠左栏">
         <span class="icon-shell" aria-hidden="true">
@@ -19,6 +19,52 @@
         </span>
         <span class="sr-only">切换左栏</span>
       </button>
+    </div>
+
+    <section class="assistant-card sidebar-recommendation-panel">
+      <div class="team-paper-card-head compact-head">
+        <div>
+          <strong>推荐列表</strong>
+          <span>最近两周里，大家更常看也更常点赞的论文</span>
+        </div>
+        <span>{{ recommendation_feed|length }} 篇</span>
+      </div>
+      {% if selected_paper %}
+        <form action="{{ url_for('recommend_route') }}" method="post" class="assistant-inline-note sidebar-recommend-action">
+          <input type="hidden" name="folder" value="{{ current_folder }}">
+          <input type="hidden" name="q" value="{{ query }}">
+          <input type="hidden" name="sort" value="{{ sort_by }}">
+          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+          <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+          <input type="hidden" name="tab" value="{{ selected_tab }}">
+          <div>
+            <strong>{{ selected_paper.display_title }}</strong>
+            <p>{% if selected_paper_context.recommended_by_current_user %}你已经把这篇放进推荐列表{% else %}如果这篇值得组里继续看，可以直接把它放进推荐列表{% endif %}</p>
+          </div>
+          <button type="submit" class="{% if selected_paper_context.recommended_by_current_user %}secondary{% endif %}">{% if selected_paper_context.recommended_by_current_user %}取消推荐{% else %}加入推荐列表{% endif %}</button>
+        </form>
+      {% endif %}
+      <div class="recommendation-feed-list sidebar-recommendation-feed">
+        {% for paper in recommendation_feed %}
+          <a class="recommendation-feed-item {% if selected_paper and paper.rel_path == selected_paper.rel_path %}active{% endif %}" href="{{ paper.paper_url }}">
+            <div>
+              <strong>{{ paper.display_title }}</strong>
+              <p>{{ paper.file_name }}{% if paper.extracted_date %} · {{ paper.extracted_date }}{% endif %}</p>
+            </div>
+            <div class="recommendation-feed-meta">
+              <span>{{ paper.recommendation_count }} 人推荐</span>
+              <span>{{ paper.like_count }} 个赞</span>
+            </div>
+          </a>
+        {% else %}
+          <p class="team-empty-copy">最近两周里还没有形成明显共识的论文，等大家多点几个赞，这里就会慢慢浮出来。</p>
+        {% endfor %}
+      </div>
+    </section>
+
+    <div class="sidebar-index-head">
+      <strong>论文索引</strong>
+      <span><span id="paper-count">{{ papers|length }}</span> 篇</span>
     </div>
 
     <form class="nav-filter-form" action="{{ url_for('index') }}" method="get">
@@ -125,12 +171,12 @@
     <div class="viewer-toolbar viewer-toolbar-slim">
       <div class="viewer-toolbar-copy">
         {% if selected_paper %}
-          <p class="eyebrow">论文阅读</p>
+          <p class="eyebrow">原文阅读</p>
           <h2>{{ selected_paper.display_title }}</h2>
           <p class="viewer-subtitle">{{ selected_paper.file_name }} · {{ format_bytes(selected_paper.file_size) }}</p>
         {% else %}
-          <p class="eyebrow">论文阅读</p>
-          <h2>原文与解读</h2>
+          <p class="eyebrow">原文阅读</p>
+          <h2>原文与标签</h2>
           <p class="viewer-subtitle">选中一篇论文后，这里会显示原文和已经生成的分析结果。</p>
         {% endif %}
       </div>
@@ -154,12 +200,63 @@
 
     {% if selected_paper %}
       <div class="viewer-head viewer-head-compact viewer-head-flat">
-        <div class="viewer-meta viewer-meta-inline">
-          {% if selected_paper.extracted_date %}<span>{{ selected_paper.extracted_date }}</span>{% endif %}
-          <span>{{ selected_paper_context.recommendation_count }} 条推荐</span>
-          <span>{{ selected_paper_context.like_count }} 个赞</span>
-          <span>{{ selected_paper_context.comment_count }} 条评论</span>
+        <div class="viewer-meta-tags">
+          <div class="viewer-meta viewer-meta-inline">
+            {% if selected_paper.extracted_date %}<span>{{ selected_paper.extracted_date }}</span>{% endif %}
+            <span>{{ selected_paper_context.recommendation_count }} 人推荐</span>
+            <span>{{ selected_paper_context.like_count }} 个赞</span>
+            <span>{{ selected_paper_context.comment_count }} 条评论</span>
+          </div>
+          <div class="viewer-tag-summary">
+            {% for tag in selected_paper_context.tags[:4] %}
+              <div class="team-tag-chip source-{{ tag.source_type }} compact-tag-chip">
+                <span>#{{ tag.name }}</span>
+              </div>
+            {% endfor %}
+            {% if selected_paper_context.tags|length > 4 %}
+              <button type="button" class="ghost-button compact-tag-toggle" data-collapsible-toggle="tags-inline" data-extra-count="{{ selected_paper_context.tags|length - 4 }}" aria-expanded="false">+{{ selected_paper_context.tags|length - 4 }}</button>
+            {% elif selected_paper_context.tags %}
+              <button type="button" class="ghost-button compact-tag-toggle" data-collapsible-toggle="tags-inline" data-extra-count="0" aria-expanded="false">+</button>
+            {% else %}
+              <button type="button" class="ghost-button compact-tag-toggle" data-collapsible-toggle="tags-inline" data-extra-count="0" aria-expanded="false">+ 标签</button>
+            {% endif %}
+          </div>
         </div>
+      </div>
+
+      <div class="viewer-inline-tags-panel" data-collapsible-body="tags-inline" hidden>
+        <div class="team-chip-list compact-chip-list inline-tag-list">
+          {% for tag in selected_paper_context.tags %}
+            <div class="team-tag-chip source-{{ tag.source_type }}">
+              <span>#{{ tag.name }}</span>
+              <small>{{ 'AI' if tag.source_type == 'auto' else ('官方' if tag.source_type == 'official' else '手动') }}</small>
+              {% if is_admin or (tag.source_type == 'manual' and current_user and current_user.display_name == tag.added_by_display_name) %}
+                <form action="{{ url_for('tag_remove_route') }}" method="post" class="inline-form">
+                  <input type="hidden" name="folder" value="{{ current_folder }}">
+                  <input type="hidden" name="q" value="{{ query }}">
+                  <input type="hidden" name="sort" value="{{ sort_by }}">
+                  <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+                  <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+                  <input type="hidden" name="tab" value="{{ selected_tab }}">
+                  <input type="hidden" name="tag_id" value="{{ tag.id }}">
+                  <button type="submit" class="ghost-button">×</button>
+                </form>
+              {% endif %}
+            </div>
+          {% else %}
+            <p class="team-empty-copy">还没有标签，先加几个关键词，之后找起来会更快。</p>
+          {% endfor %}
+        </div>
+        <form action="{{ url_for('tag_add_route') }}" method="post" class="team-inline-form compact-form viewer-compact-form">
+          <input type="hidden" name="folder" value="{{ current_folder }}">
+          <input type="hidden" name="q" value="{{ query }}">
+          <input type="hidden" name="sort" value="{{ sort_by }}">
+          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+          <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+          <input type="hidden" name="tab" value="{{ selected_tab }}">
+          <input type="text" name="tag_name" placeholder="添加标签，例如：diffusion / robotics">
+          <button type="submit">添加</button>
+        </form>
       </div>
 
       <div class="viewer-tabs">
@@ -327,9 +424,9 @@
   <aside class="assistant-pane card layout-pane pane-right" data-pane="right">
     <div class="pane-top pane-top-compact">
       <div>
-        <p class="eyebrow">一起看</p>
-        <h2>推荐与讨论</h2>
-        <p class="sidebar-copy">打开这篇论文后，推荐、标签、讨论和聊天都会集中显示在这里。</p>
+        <p class="eyebrow">边看边聊</p>
+        <h2>我爱学 / 一起学</h2>
+        <p class="sidebar-copy">右边只显示一个聊天区域；点“我爱学”或“一起学”时，会直接切换到对应那一块。</p>
       </div>
       <button type="button" class="icon-button pane-toggle" data-pane-button="right" data-toggle-pane="right" title="折叠右栏" aria-label="折叠右栏">
         <span class="icon-shell" aria-hidden="true">
@@ -343,226 +440,83 @@
       </button>
     </div>
 
+    <div class="assistant-switch-row" role="tablist" aria-label="聊天区域切换">
+      <button type="button" class="assistant-switch-button" data-chat-switch="private" aria-pressed="false">我爱学</button>
+      <button type="button" class="assistant-switch-button" data-chat-switch="shared" aria-pressed="false">一起学</button>
+    </div>
+
     {% if selected_paper %}
-      <section class="assistant-card">
-        <div class="team-paper-card-head">
-          <strong>推荐</strong>
-          <span>{{ selected_paper_context.recommendation_count }} 条</span>
-        </div>
-        <div class="team-chip-list">
-          {% for recommendation in selected_paper_context.recommendations %}
-            <div class="team-note-item">
-              <strong>{{ recommendation.display_name }}</strong>
-              <p>{{ recommendation.reason }}</p>
-              <small>{{ recommendation.created_at }}</small>
-            </div>
-          {% else %}
-            <p class="team-empty-copy">还没有人写推荐理由。</p>
-          {% endfor %}
-        </div>
-        <form action="{{ url_for('recommend_route') }}" method="post" class="team-inline-form">
-          <input type="hidden" name="folder" value="{{ current_folder }}">
-          <input type="hidden" name="q" value="{{ query }}">
-          <input type="hidden" name="sort" value="{{ sort_by }}">
-          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-          <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-          <input type="hidden" name="tab" value="{{ selected_tab }}">
-          <textarea name="reason" rows="3" placeholder="写下你为什么想把这篇论文分享给大家"></textarea>
-          <button type="submit">保存推荐理由</button>
-        </form>
-      </section>
-
-      <section class="assistant-card" data-collapsible-card="tags">
-        <div class="team-paper-card-head">
-          <strong>标签</strong>
-          <div class="collapsible-head-actions">
-            <span>{{ selected_paper_context.tags|length }} 个</span>
-            <button type="button" class="ghost-button collapsible-toggle" data-collapsible-toggle="tags" aria-expanded="true">收起</button>
+      <section class="assistant-card team-chat-card" data-chat-panel="private" id="chat-private">
+        <div class="team-paper-card-head compact-head">
+          <div>
+            <strong>我爱学</strong>
+            <span>只保留你和 Paper Bot 的对话</span>
           </div>
+          <span data-chat-count="private">{{ selected_chat_context.private.count }} 条</span>
         </div>
-        <div data-collapsible-body="tags">
-          <div class="team-chip-list">
-            {% for tag in selected_paper_context.tags %}
-              <div class="team-tag-chip source-{{ tag.source_type }}">
-                <span>#{{ tag.name }}</span>
-                <small>{{ 'AI' if tag.source_type == 'auto' else ('官方' if tag.source_type == 'official' else '手动') }}</small>
-                {% if is_admin or (tag.source_type == 'manual' and current_user and current_user.display_name == tag.added_by_display_name) %}
-                  <form action="{{ url_for('tag_remove_route') }}" method="post" class="inline-form">
-                    <input type="hidden" name="folder" value="{{ current_folder }}">
-                    <input type="hidden" name="q" value="{{ query }}">
-                    <input type="hidden" name="sort" value="{{ sort_by }}">
-                    <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-                    <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-                    <input type="hidden" name="tab" value="{{ selected_tab }}">
-                    <input type="hidden" name="tag_id" value="{{ tag.id }}">
-                    <button type="submit" class="ghost-button">×</button>
-                  </form>
-                {% endif %}
-              </div>
-            {% else %}
-              <p class="team-empty-copy">还没有标签，先加几个关键词，之后找起来会更快。</p>
-            {% endfor %}
-          </div>
-          <form action="{{ url_for('tag_add_route') }}" method="post" class="team-inline-form compact-form">
-            <input type="hidden" name="folder" value="{{ current_folder }}">
-            <input type="hidden" name="q" value="{{ query }}">
-            <input type="hidden" name="sort" value="{{ sort_by }}">
-            <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-            <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-            <input type="hidden" name="tab" value="{{ selected_tab }}">
-            <input type="text" name="tag_name" placeholder="添加标签，例如：diffusion / robotics">
-            <button type="submit">添加</button>
-          </form>
-        </div>
-      </section>
-
-      <section class="assistant-card">
-        <div class="team-paper-card-head">
-          <strong>已有解读与来源</strong>
-          <span>{{ selected_paper_context.prompt_runs|length }} 条</span>
-        </div>
-        <div class="team-note-list">
-          {% for run in selected_paper_context.prompt_runs %}
-            <div class="team-note-item">
-              <strong>{{ run.prompt_name }}</strong>
-              <p>v{{ run.prompt_version }} · {{ run.model }}</p>
-              <small>{% if run.generated_by_display_name %}{{ run.generated_by_display_name }} · {% endif %}{{ run.generated_at or '已生成' }}</small>
-            </div>
-          {% else %}
-            <p class="team-empty-copy">这篇论文还没有现成的分析结果。</p>
-          {% endfor %}
-          {% for source in selected_paper_context.sources %}
-            <div class="team-note-item muted-item">
-              <strong>{{ source.source_type }}</strong>
-              <p>{{ source.source_value }}</p>
-            </div>
-          {% endfor %}
-        </div>
-      </section>
-
-      <section class="assistant-card discussion-card">
-        <div class="team-paper-card-head">
-          <strong>团队讨论</strong>
-          <span>{{ selected_paper_context.comment_count }} 条</span>
-        </div>
-        <form action="{{ url_for('comment_route') }}" method="post" class="team-inline-form">
-          <input type="hidden" name="folder" value="{{ current_folder }}">
-          <input type="hidden" name="q" value="{{ query }}">
-          <input type="hidden" name="sort" value="{{ sort_by }}">
-          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-          <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-          <input type="hidden" name="tab" value="{{ selected_tab }}">
-          <textarea name="body" rows="3" placeholder="把你的想法、问题或结论写下来，其他人打开这篇论文时就能看到"></textarea>
-          <button type="submit">发表评论</button>
-        </form>
-        <div class="team-comment-list">
-          {% for comment in selected_paper_context.comments %}
-            <article class="team-comment-item">
+        <div class="team-chat-thread" data-chat-thread="private">
+          {% for message in selected_chat_context.private.messages %}
+            <article class="team-chat-message role-{{ message.role }} status-{{ message.status }}">
               <header>
-                <strong>{{ comment.display_name }}</strong>
-                <small>{{ comment.created_at }}</small>
+                <strong>{{ message.display_name }}</strong>
+                <small>{{ message.created_at }}</small>
               </header>
-              <p>{{ comment.body }}</p>
-              {% for reply in comment.replies %}
-                <div class="team-comment-reply">
-                  <header>
-                    <strong>{{ reply.display_name }}</strong>
-                    <small>{{ reply.created_at }}</small>
-                  </header>
-                  <p>{{ reply.body }}</p>
-                </div>
-              {% endfor %}
-              <form action="{{ url_for('comment_route') }}" method="post" class="team-inline-form compact-form reply-form">
-                <input type="hidden" name="folder" value="{{ current_folder }}">
-                <input type="hidden" name="q" value="{{ query }}">
-                <input type="hidden" name="sort" value="{{ sort_by }}">
-                <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-                <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-                <input type="hidden" name="tab" value="{{ selected_tab }}">
-                <input type="hidden" name="parent_id" value="{{ comment.id }}">
-                <input type="text" name="body" placeholder="回复 {{ comment.display_name }}">
-                <button type="submit">回复</button>
-              </form>
+              <div class="team-chat-body markdown-render">{{ message.body_html|safe }}</div>
             </article>
           {% else %}
-            <p class="team-empty-copy">还没有讨论，写下第一条想法，后面的人就能接着聊。</p>
+            <p class="team-empty-copy">这里就是“我爱学”，适合记只想留给自己看的问题、复现思路和临时笔记。</p>
           {% endfor %}
         </div>
+        <form action="{{ url_for('chat_send_route') }}" method="post" class="team-inline-form" data-chat-form>
+          <input type="hidden" name="folder" value="{{ current_folder }}">
+          <input type="hidden" name="q" value="{{ query }}">
+          <input type="hidden" name="sort" value="{{ sort_by }}">
+          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+          <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+          <input type="hidden" name="tab" value="{{ selected_tab }}">
+          <input type="hidden" name="visibility" value="private">
+          <textarea name="body" rows="3" placeholder="记一个只留给自己的问题，或者写下一条个人学习笔记"></textarea>
+          <button type="submit">发到我爱学</button>
+        </form>
       </section>
 
-      <section class="assistant-card">
-        <div class="team-paper-card-head">
-          <strong>聊天记录</strong>
-          <span>共享 + 私人</span>
-        </div>
-        <div class="team-chat-grid">
-          <div class="team-chat-card" data-chat-card="shared">
-            <div class="team-paper-card-head compact-head">
-              <strong>共享聊天</strong>
-              <span data-chat-count="shared">{{ selected_chat_context.shared.count }} 条</span>
-            </div>
-            <div class="team-chat-thread" data-chat-thread="shared">
-              {% for message in selected_chat_context.shared.messages %}
-                <article class="team-chat-message role-{{ message.role }} status-{{ message.status }}">
-                  <header>
-                    <strong>{{ message.display_name }}</strong>
-                    <small>{{ message.created_at }}</small>
-                  </header>
-                  <p>{{ message.body }}</p>
-                </article>
-              {% else %}
-                <p class="team-empty-copy">这里会显示大家围绕这篇论文的聊天记录；只要打开这篇论文，所有人都能看到。</p>
-              {% endfor %}
-            </div>
-            <form action="{{ url_for('chat_send_route') }}" method="post" class="team-inline-form" data-chat-form>
-              <input type="hidden" name="folder" value="{{ current_folder }}">
-              <input type="hidden" name="q" value="{{ query }}">
-              <input type="hidden" name="sort" value="{{ sort_by }}">
-              <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-              <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-              <input type="hidden" name="tab" value="{{ selected_tab }}">
-              <input type="hidden" name="visibility" value="shared">
-              <textarea name="body" rows="3" placeholder="写下问题、观点或想让 Paper Bot 一起参与的讨论"></textarea>
-              <button type="submit">发到共享聊天</button>
-            </form>
+      <section class="assistant-card team-chat-card" data-chat-panel="shared" id="chat-shared" hidden>
+        <div class="team-paper-card-head compact-head">
+          <div>
+            <strong>一起学</strong>
+            <span>大家打开同一篇论文时，都能接着往下聊</span>
           </div>
-
-          <div class="team-chat-card" data-chat-card="private">
-            <div class="team-paper-card-head compact-head">
-              <strong>私人聊天</strong>
-              <span data-chat-count="private">{{ selected_chat_context.private.count }} 条</span>
-            </div>
-            <div class="team-chat-thread" data-chat-thread="private">
-              {% for message in selected_chat_context.private.messages %}
-                <article class="team-chat-message role-{{ message.role }} status-{{ message.status }}">
-                  <header>
-                    <strong>{{ message.display_name }}</strong>
-                    <small>{{ message.created_at }}</small>
-                  </header>
-                  <p>{{ message.body }}</p>
-                </article>
-              {% else %}
-                <p class="team-empty-copy">这里只有你和 Paper Bot 的对话，适合记个人问题、复现想法或临时笔记。</p>
-              {% endfor %}
-            </div>
-            <form action="{{ url_for('chat_send_route') }}" method="post" class="team-inline-form" data-chat-form>
-              <input type="hidden" name="folder" value="{{ current_folder }}">
-              <input type="hidden" name="q" value="{{ query }}">
-              <input type="hidden" name="sort" value="{{ sort_by }}">
-              <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-              <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-              <input type="hidden" name="tab" value="{{ selected_tab }}">
-              <input type="hidden" name="visibility" value="private">
-              <textarea name="body" rows="3" placeholder="问一个只想留给自己看的问题，或者记下一条个人笔记"></textarea>
-              <button type="submit">发到私人聊天</button>
-            </form>
-          </div>
+          <span data-chat-count="shared">{{ selected_chat_context.shared.count }} 条</span>
         </div>
+        <div class="team-chat-thread" data-chat-thread="shared">
+          {% for message in selected_chat_context.shared.messages %}
+            <article class="team-chat-message role-{{ message.role }} status-{{ message.status }}">
+              <header>
+                <strong>{{ message.display_name }}</strong>
+                <small>{{ message.created_at }}</small>
+              </header>
+              <div class="team-chat-body markdown-render">{{ message.body_html|safe }}</div>
+            </article>
+          {% else %}
+            <p class="team-empty-copy">这里就是“一起学”，只要大家打开这篇论文，就能接着前面的话题继续往下聊。</p>
+          {% endfor %}
+        </div>
+        <form action="{{ url_for('chat_send_route') }}" method="post" class="team-inline-form" data-chat-form>
+          <input type="hidden" name="folder" value="{{ current_folder }}">
+          <input type="hidden" name="q" value="{{ query }}">
+          <input type="hidden" name="sort" value="{{ sort_by }}">
+          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+          <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+          <input type="hidden" name="tab" value="{{ selected_tab }}">
+          <input type="hidden" name="visibility" value="shared">
+          <textarea name="body" rows="3" placeholder="写下想让大家一起聊的问题、判断或结论，也可以叫上 Paper Bot 一起参与"></textarea>
+          <button type="submit">发到一起学</button>
+        </form>
       </section>
     {% else %}
       <div class="assistant-empty">
         <strong>还没有选中文件</strong>
-        <p>选中一篇论文后，这里会显示大家留下的推荐、讨论和聊天记录。</p>
+        <p>选中一篇论文后，右边会显示“我爱学”和“一起学”两块聊天区域。</p>
       </div>
     {% endif %}
   </aside>
@@ -1041,6 +995,8 @@
       const selectedPromptCard = document.getElementById("selected-prompt-job");
       const collapsibleButtons = Array.from(document.querySelectorAll("[data-collapsible-toggle]"));
       const chatForms = Array.from(document.querySelectorAll("[data-chat-form]"));
+      const chatSwitchButtons = Array.from(document.querySelectorAll("[data-chat-switch]"));
+      const chatPanels = Array.from(document.querySelectorAll("[data-chat-panel]"));
       const chatThreads = {
         shared: document.querySelector('[data-chat-thread="shared"]'),
         private: document.querySelector('[data-chat-thread="private"]'),
@@ -1072,6 +1028,7 @@
       };
       const layoutStateKey = "paper-reader-layout-v4";
       const collapsibleStateKey = "paper-reader-collapsible-v1";
+      const chatPanelStateKey = "paper-reader-chat-panel-v1";
       const defaultLayoutState = {
         leftWidth: 264,
         rightWidth: 388,
@@ -1085,6 +1042,7 @@
       };
       let layoutState = loadLayoutState();
       let collapsibleState = loadCollapsibleState();
+      let activeChatPanel = loadSimpleValue(chatPanelStateKey, "private");
       let settingsReturnFocus = null;
 
       function loadLayoutState() {
@@ -1113,6 +1071,22 @@
 
       function persistCollapsibleState() {
         window.localStorage.setItem(collapsibleStateKey, JSON.stringify(collapsibleState));
+      }
+
+      function loadSimpleValue(key, fallback) {
+        try {
+          return window.localStorage.getItem(key) || fallback;
+        } catch (error) {
+          return fallback;
+        }
+      }
+
+      function persistSimpleValue(key, value) {
+        try {
+          window.localStorage.setItem(key, value);
+        } catch (error) {
+          // Ignore storage failures; the UI still works for this session.
+        }
       }
 
       function clamp(value, min, max) {
@@ -1572,7 +1546,12 @@
         const button = document.querySelector(`[data-collapsible-toggle="${CSS.escape(name)}"]`);
         if (!body || !button) return;
         body.hidden = !expanded;
-        button.textContent = expanded ? "收起" : "展开";
+        if (name === "tags-inline") {
+          const extraCount = Number(button.dataset.extraCount || "0");
+          button.textContent = expanded ? "收起标签" : (extraCount > 0 ? `+${extraCount}` : "+ 标签");
+        } else {
+          button.textContent = expanded ? "收起" : "展开";
+        }
         button.setAttribute("aria-expanded", expanded ? "true" : "false");
       }
 
@@ -1580,10 +1559,16 @@
         collapsibleButtons.forEach((button) => {
           const name = button.dataset.collapsibleToggle || "";
           if (!name) return;
-          const expanded = collapsibleState[name] !== false;
+          const defaultExpanded = name === "tags-inline" ? false : true;
+          const expanded = Object.prototype.hasOwnProperty.call(collapsibleState, name)
+            ? collapsibleState[name] !== false
+            : defaultExpanded;
           applyCollapsibleState(name, expanded);
           button.addEventListener("click", () => {
-            const nextExpanded = !(collapsibleState[name] !== false);
+            const currentExpanded = Object.prototype.hasOwnProperty.call(collapsibleState, name)
+              ? collapsibleState[name] !== false
+              : defaultExpanded;
+            const nextExpanded = !currentExpanded;
             collapsibleState[name] = nextExpanded;
             applyCollapsibleState(name, nextExpanded);
             persistCollapsibleState();
@@ -1591,14 +1576,40 @@
         });
       }
 
+      function applyChatPanel(target) {
+        const available = new Set(chatPanels.map((panel) => panel.dataset.chatPanel || ""));
+        const nextTarget = available.has(target) ? target : "private";
+        activeChatPanel = nextTarget;
+        chatSwitchButtons.forEach((button) => {
+          const active = (button.dataset.chatSwitch || "") === nextTarget;
+          button.classList.toggle("is-active", active);
+          button.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+        chatPanels.forEach((panel) => {
+          panel.hidden = (panel.dataset.chatPanel || "") !== nextTarget;
+        });
+      }
+
+      function initializeChatPanelSwitch() {
+        if (!chatSwitchButtons.length || !chatPanels.length) return;
+        applyChatPanel(activeChatPanel);
+        chatSwitchButtons.forEach((button) => {
+          button.addEventListener("click", () => {
+            applyChatPanel(button.dataset.chatSwitch || "private");
+            persistSimpleValue(chatPanelStateKey, activeChatPanel);
+          });
+        });
+      }
+
       function renderChatMessage(message) {
+        const bodyHtml = message.body_html || `<p>${escapeHtml(message.body)}</p>`;
         return `
           <article class="team-chat-message role-${escapeHtml(message.role)} status-${escapeHtml(message.status)}">
             <header>
               <strong>${escapeHtml(message.display_name)}</strong>
               <small>${escapeHtml(message.created_at)}</small>
             </header>
-            <p>${escapeHtml(message.body)}</p>
+            <div class="team-chat-body markdown-render">${bodyHtml}</div>
           </article>
         `;
       }
@@ -1613,8 +1624,8 @@
         }
         if (!messages.length) {
           container.innerHTML = visibility === "shared"
-            ? '<p class="team-empty-copy">这里会显示大家围绕这篇论文的聊天记录；只要打开这篇论文，所有人都能看到。</p>'
-            : '<p class="team-empty-copy">这里只有你和 Paper Bot 的对话，适合记个人问题、复现想法或临时笔记。</p>';
+            ? '<p class="team-empty-copy">这里就是“一起学”，只要大家打开这篇论文，就能接着前面的话题继续往下聊。</p>'
+            : '<p class="team-empty-copy">这里就是“我爱学”，适合记只想留给自己看的问题、复现思路和临时笔记。</p>';
           return;
         }
         container.innerHTML = messages.map(renderChatMessage).join("");
@@ -1955,6 +1966,7 @@
       }
 
       initializeCollapsibleCards();
+      initializeChatPanelSwitch();
 
       if (dashboard) {
         renderJobs(initialData);

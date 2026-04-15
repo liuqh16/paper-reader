@@ -1680,12 +1680,17 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 break
         return contexts
 
+    def serialize_chat_message(message: Any) -> dict[str, Any]:
+        payload = asdict(message) if hasattr(message, "__dataclass_fields__") else dict(message)
+        payload["body_html"] = render_markdown(str(payload.get("body", "")))
+        return payload
+
     def serialize_chat_context(context: dict[str, Any]) -> dict[str, Any]:
         return {
             visibility: {
                 "count": int(thread.get("count", 0)),
                 "visibility": thread.get("visibility", visibility),
-                "messages": [asdict(message) for message in thread.get("messages", [])],
+                "messages": [serialize_chat_message(message) for message in thread.get("messages", [])],
             }
             for visibility, thread in context.items()
         }
@@ -1824,6 +1829,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             "comments": [],
             "like_count": 0,
             "liked_by_current_user": False,
+            "recommended_by_current_user": False,
             "recommendation_count": 0,
             "comment_count": 0,
             "prompt_runs": [],
@@ -1841,10 +1847,10 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 selected_paper.rel_path,
                 current_user_id(),
             )
-            selected_chat_context = app.team_store.chat_context(  # type: ignore[attr-defined]
+            selected_chat_context = serialize_chat_context(app.team_store.chat_context(  # type: ignore[attr-defined]
                 selected_paper.rel_path,
                 current_user_id(),
-            )
+            ))
             for prompt in active_prompts:
                 info = app.library.prompt_result_info(selected_paper.rel_path, prompt.slug)  # type: ignore[attr-defined]
                 latest_job = app.job_queue.latest_job_for(selected_paper.rel_path, prompt.slug)  # type: ignore[attr-defined]
@@ -1873,6 +1879,24 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         else:
             selected_tab = "source"
 
+        recommendation_feed = []
+        for item in app.team_store.recent_recommendation_feed(limit=5, window_days=14):  # type: ignore[attr-defined]
+            paper_url_params: dict[str, Any] = {
+                "folder": folder,
+                "q": query,
+                "sort": sort_by,
+                "paper": item["rel_path"],
+                "tab": "source",
+            }
+            if show_done:
+                paper_url_params["show_done"] = "1"
+            recommendation_feed.append(
+                {
+                    **item,
+                    "paper_url": url_for("index", **paper_url_params),
+                }
+            )
+
         return render_template(
             "index.html",
             papers=papers,
@@ -1895,6 +1919,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             selected_prompt_job=selected_prompt_job,
             selected_paper_context=selected_paper_context,
             selected_chat_context=selected_chat_context,
+            recommendation_feed=recommendation_feed,
             active_prompts=active_prompts,
             active_prompt_count=len(active_prompts),
             library_root=app.config["LIBRARY_ROOT"],
@@ -2299,8 +2324,13 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
         try:
             ensure_paper_metadata(rel_path)
-            app.team_store.add_recommendation(rel_path, actor.id, request.form.get("reason", ""))  # type: ignore[attr-defined]
-            flash("推荐理由已保存。", "success")
+            reason = request.form.get("reason", "")
+            if reason.strip():
+                app.team_store.add_recommendation(rel_path, actor.id, reason)  # type: ignore[attr-defined]
+                flash("推荐说明已经记下。", "success")
+            else:
+                recommended = app.team_store.toggle_recommendation(rel_path, actor.id)  # type: ignore[attr-defined]
+                flash("这篇论文已经加入推荐。" if recommended else "这篇论文已经从推荐里移除。", "success")
         except (ValueError, FileNotFoundError) as exc:
             flash(str(exc), "error")
         return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
