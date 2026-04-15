@@ -703,6 +703,66 @@ main {
 .reply-form {
   margin-top: 10px;
 }
+.compact-head {
+  margin-bottom: 8px;
+}
+.collapsible-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.collapsible-toggle {
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(84, 60, 35, 0.14);
+  background: rgba(255,255,255,0.9);
+}
+.team-chat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+.team-chat-card {
+  display: grid;
+  gap: 10px;
+}
+.team-chat-thread {
+  display: grid;
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.team-chat-message {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(84, 60, 35, 0.12);
+  background: rgba(255,255,255,0.92);
+}
+.team-chat-message.role-user {
+  background: rgba(29, 78, 216, 0.06);
+}
+.team-chat-message.role-assistant {
+  background: rgba(16, 185, 129, 0.08);
+}
+.team-chat-message.status-pending {
+  background: rgba(245, 158, 11, 0.1);
+  border-color: rgba(245, 158, 11, 0.2);
+}
+.team-chat-message.status-failed {
+  background: rgba(220, 38, 38, 0.06);
+  border-color: rgba(220, 38, 38, 0.18);
+}
+.team-chat-message p {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+}
+.team-user-form {
+  padding: 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(84, 60, 35, 0.12);
+  background: rgba(255,255,255,0.92);
+}
 .ghost-button {
   padding: 0;
   border: 0;

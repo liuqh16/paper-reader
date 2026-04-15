@@ -36,10 +36,14 @@
             <span>内部标识</span>
             <input type="text" name="slug" value="{{ prompt.slug }}" readonly>
           </label>
-          <label>
-            <span>模型</span>
-            <input type="text" name="model" value="{{ prompt.model }}">
-          </label>
+          {% if can_manage_prompts %}
+            <label>
+              <span>模型</span>
+              <input type="text" name="model" value="{{ prompt.model }}">
+            </label>
+          {% else %}
+            <p class="tool-hint">模型与系统参数由管理员统一维护。</p>
+          {% endif %}
           <div class="checkbox-pair">
             <label class="checkbox-line"><input type="checkbox" name="enabled" {% if prompt.enabled %}checked{% endif %}> 启用这个 Prompt</label>
             <label class="checkbox-line"><input type="checkbox" name="auto_run" {% if prompt.auto_run %}checked{% endif %}> 新论文自动应用</label>
@@ -94,10 +98,14 @@
           <span>内部标识</span>
           <input type="text" name="slug" value="{{ new_prompt_defaults.slug }}" placeholder="可留空；系统会自动生成，例如：method-breakdown">
         </label>
-        <label>
-          <span>模型</span>
-          <input type="text" name="model" value="{{ new_prompt_defaults.model }}">
-        </label>
+        {% if can_manage_prompts %}
+          <label>
+            <span>模型</span>
+            <input type="text" name="model" value="{{ new_prompt_defaults.model }}">
+          </label>
+        {% else %}
+          <p class="tool-hint">模型与系统参数由管理员统一维护。</p>
+        {% endif %}
         <div class="checkbox-pair">
           <label class="checkbox-line"><input type="checkbox" name="enabled" {% if new_prompt_defaults.enabled %}checked{% endif %}> 启用这个 Prompt</label>
           <label class="checkbox-line"><input type="checkbox" name="auto_run" {% if new_prompt_defaults.auto_run %}checked{% endif %}> 新论文自动应用</label>

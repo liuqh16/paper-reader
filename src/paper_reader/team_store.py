@@ -101,6 +101,17 @@ class TeamPromptRun:
     status: str
 
 
+@dataclass(slots=True)
+class TeamChatMessage:
+    id: int
+    role: str
+    display_name: str
+    body: str
+    created_at: str
+    status: str
+    model: str | None
+
+
 class TeamStore:
     def __init__(self, root: Path, db_name: str = DEFAULT_DB_NAME):
         self.root = root.resolve()
@@ -254,6 +265,32 @@ class TeamStore:
                     FOREIGN KEY (triggered_by_user_id) REFERENCES users(id) ON DELETE SET NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS chat_threads (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    paper_id INTEGER NOT NULL,
+                    visibility TEXT NOT NULL,
+                    owner_user_id INTEGER,
+                    thread_key TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+                    FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    thread_id INTEGER NOT NULL,
+                    user_id INTEGER,
+                    role TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'completed',
+                    model TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_papers_sort_date ON papers(sort_date);
                 CREATE INDEX IF NOT EXISTS idx_papers_display_title ON papers(display_title);
                 CREATE INDEX IF NOT EXISTS idx_papers_folder ON papers(folder);
@@ -262,6 +299,8 @@ class TeamStore:
                 CREATE INDEX IF NOT EXISTS idx_prompt_runs_paper_id ON prompt_runs(paper_id);
                 CREATE INDEX IF NOT EXISTS idx_paper_sources_paper_id ON paper_sources(paper_id);
                 CREATE INDEX IF NOT EXISTS idx_paper_tags_tag_id ON paper_tags(tag_id);
+                CREATE INDEX IF NOT EXISTS idx_chat_threads_paper_id ON chat_threads(paper_id);
+                CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_id ON chat_messages(thread_id);
                 """
             )
             self._seed_roles(conn)
@@ -455,6 +494,86 @@ class TeamStore:
         user = self.get_user_by_username(username)
         if user is None:
             raise RuntimeError("Failed to create user.")
+        return user
+
+    def _role_id_for_slug_locked(self, conn: sqlite3.Connection, role_slug: str) -> int:
+        row = conn.execute("SELECT id FROM roles WHERE slug = ?", (role_slug,)).fetchone()
+        if row is None:
+            raise ValueError("不支持的角色。")
+        return int(row[0])
+
+    def _active_admin_count_locked(self, conn: sqlite3.Connection) -> int:
+        row = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM users u
+            JOIN user_roles ur ON ur.user_id = u.id
+            JOIN roles r ON r.id = ur.role_id
+            WHERE u.is_active = 1 AND r.slug = 'admin'
+            """
+        ).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def update_user(
+        self,
+        user_id: int,
+        *,
+        display_name: str | None = None,
+        role_slug: str | None = None,
+        is_active: bool | None = None,
+        password: str | None = None,
+        acting_user_id: int | None = None,
+    ) -> TeamUser:
+        if role_slug is not None and role_slug not in {"admin", "member"}:
+            raise ValueError("不支持的角色。")
+        cleaned_password = (password or "").strip()
+        with self._write_lock:
+            with self._connect() as conn:
+                row = conn.execute(
+                    """
+                    SELECT u.id, u.username, u.display_name, u.is_active, COALESCE(r.slug, 'member') AS role
+                    FROM users u
+                    LEFT JOIN user_roles ur ON ur.user_id = u.id
+                    LEFT JOIN roles r ON r.id = ur.role_id
+                    WHERE u.id = ?
+                    """,
+                    (user_id,),
+                ).fetchone()
+                if row is None:
+                    raise FileNotFoundError(user_id)
+
+                username = str(row["username"])
+                next_display_name = (display_name or str(row["display_name"])).strip() or username
+                next_role = role_slug or str(row["role"] or "member")
+                next_is_active = bool(row["is_active"]) if is_active is None else bool(is_active)
+                current_role = str(row["role"] or "member")
+                current_is_active = bool(row["is_active"])
+
+                if acting_user_id == user_id and not next_is_active:
+                    raise ValueError("不能停用当前登录账号。")
+
+                if current_role == "admin" and current_is_active and (next_role != "admin" or not next_is_active):
+                    if self._active_admin_count_locked(conn) <= 1:
+                        raise ValueError("至少需要保留一个启用中的管理员账号。")
+
+                now = self._timestamp()
+                conn.execute(
+                    "UPDATE users SET display_name = ?, is_active = ?, updated_at = ? WHERE id = ?",
+                    (next_display_name, 1 if next_is_active else 0, now, user_id),
+                )
+                if cleaned_password:
+                    conn.execute(
+                        "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?",
+                        (generate_password_hash(cleaned_password), now, user_id),
+                    )
+                conn.execute(
+                    "INSERT OR REPLACE INTO user_roles(user_id, role_id) VALUES (?, ?)",
+                    (user_id, self._role_id_for_slug_locked(conn, next_role)),
+                )
+
+        user = self.get_user(user_id)
+        if user is None:
+            raise RuntimeError("Failed to update user.")
         return user
 
     def is_admin(self, user_id: int | None) -> bool:
@@ -736,6 +855,211 @@ class TeamStore:
                 (wildcard, wildcard, wildcard, wildcard, wildcard, wildcard, wildcard, wildcard),
             ).fetchall()
         return {str(row["rel_path"]) for row in rows}
+
+    def _chat_thread_key(self, paper_id: int, visibility: str, owner_user_id: int | None) -> str:
+        if visibility == "shared":
+            return f"shared:{paper_id}"
+        if visibility == "private" and owner_user_id is not None:
+            return f"private:{paper_id}:{owner_user_id}"
+        raise ValueError("Unsupported chat visibility.")
+
+    def _ensure_chat_thread_locked(
+        self,
+        conn: sqlite3.Connection,
+        paper_id: int,
+        visibility: str,
+        owner_user_id: int | None,
+    ) -> int:
+        thread_key = self._chat_thread_key(paper_id, visibility, owner_user_id)
+        row = conn.execute("SELECT id FROM chat_threads WHERE thread_key = ?", (thread_key,)).fetchone()
+        if row is not None:
+            return int(row["id"])
+        now = self._timestamp()
+        cursor = conn.execute(
+            """
+            INSERT INTO chat_threads(paper_id, visibility, owner_user_id, thread_key, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (paper_id, visibility, owner_user_id, thread_key, now, now),
+        )
+        created_thread_id = cursor.lastrowid
+        if created_thread_id is None:
+            raise RuntimeError("Failed to persist chat thread.")
+        return int(created_thread_id)
+
+    def _chat_messages_for_thread_locked(
+        self,
+        conn: sqlite3.Connection,
+        thread_id: int,
+        *,
+        limit: int = 16,
+    ) -> list[TeamChatMessage]:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM (
+                SELECT cm.id, cm.role, cm.body, cm.created_at, cm.status, cm.model,
+                       COALESCE(u.display_name, u.username) AS display_name
+                FROM chat_messages cm
+                LEFT JOIN users u ON u.id = cm.user_id
+                WHERE cm.thread_id = ?
+                ORDER BY cm.id DESC
+                LIMIT ?
+            ) recent
+            ORDER BY id ASC
+            """,
+            (thread_id, limit),
+        ).fetchall()
+        return [
+            TeamChatMessage(
+                id=int(row["id"]),
+                role=str(row["role"]),
+                display_name=(
+                    str(row["display_name"])
+                    if row["display_name"]
+                    else ("Paper Bot" if str(row["role"]) == "assistant" else "成员")
+                ),
+                body=str(row["body"]),
+                created_at=str(row["created_at"]),
+                status=str(row["status"]),
+                model=(str(row["model"]) if row["model"] else None),
+            )
+            for row in rows
+        ]
+
+    def add_chat_message(
+        self,
+        rel_path: str,
+        *,
+        visibility: str,
+        body: str,
+        user_id: int | None,
+        role: str,
+        status: str = "completed",
+        model: str | None = None,
+    ) -> int:
+        message_body = body.strip()
+        if not message_body:
+            raise ValueError("消息不能为空。")
+        if visibility not in {"shared", "private"}:
+            raise ValueError("不支持的聊天模式。")
+        if role not in {"user", "assistant", "system"}:
+            raise ValueError("不支持的消息角色。")
+        if visibility == "private" and user_id is None:
+            raise ValueError("私聊消息必须绑定当前用户。")
+
+        with self._write_lock:
+            with self._connect() as conn:
+                paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+                if paper_id is None:
+                    raise FileNotFoundError(rel_path)
+                owner_user_id = user_id if visibility == "private" else None
+                thread_id = self._ensure_chat_thread_locked(conn, paper_id, visibility, owner_user_id)
+                now = self._timestamp()
+                cursor = conn.execute(
+                    """
+                    INSERT INTO chat_messages(thread_id, user_id, role, body, status, model, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (thread_id, user_id if role == "user" else None, role, message_body, status, model, now, now),
+                )
+                conn.execute("UPDATE chat_threads SET updated_at = ? WHERE id = ?", (now, thread_id))
+                message_id = cursor.lastrowid
+                if message_id is None:
+                    raise RuntimeError("Failed to persist chat message.")
+                return int(message_id)
+
+    def update_chat_message(
+        self,
+        message_id: int,
+        *,
+        body: str | None = None,
+        status: str | None = None,
+        model: str | None = None,
+    ) -> None:
+        changes: list[str] = []
+        values: list[Any] = []
+        if body is not None:
+            changes.append("body = ?")
+            values.append(body.strip() or "消息内容为空。")
+        if status is not None:
+            changes.append("status = ?")
+            values.append(status)
+        if model is not None:
+            changes.append("model = ?")
+            values.append(model)
+        if not changes:
+            return
+        changes.append("updated_at = ?")
+        values.append(self._timestamp())
+        values.append(message_id)
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    f"UPDATE chat_messages SET {', '.join(changes)} WHERE id = ?",
+                    values,
+                )
+
+    def mark_pending_chat_messages_failed(self) -> None:
+        now = self._timestamp()
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE chat_messages
+                    SET status = 'failed',
+                        body = CASE
+                            WHEN body LIKE 'Paper Bot 正在思考%' THEN '服务重启前的聊天任务没有完成，请重新发送一次。'
+                            ELSE body
+                        END,
+                        updated_at = ?
+                    WHERE status = 'pending'
+                    """,
+                    (now,),
+                )
+
+    def chat_history(self, rel_path: str, *, visibility: str, current_user_id: int | None, limit: int = 12) -> list[dict[str, str]]:
+        if visibility == "private" and current_user_id is None:
+            return []
+        with self._connect() as conn:
+            paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+            if paper_id is None:
+                return []
+            owner_user_id = current_user_id if visibility == "private" else None
+            thread_id = self._ensure_chat_thread_locked(conn, paper_id, visibility, owner_user_id)
+            messages = self._chat_messages_for_thread_locked(conn, thread_id, limit=limit)
+        return [
+            {"role": message.role, "display_name": message.display_name, "body": message.body}
+            for message in messages
+        ]
+
+    def chat_context(self, rel_path: str, current_user_id: int | None) -> dict[str, Any]:
+        empty_thread = {"messages": [], "count": 0, "visibility": "shared"}
+        with self._connect() as conn:
+            paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+            if paper_id is None:
+                return {
+                    "shared": empty_thread,
+                    "private": {"messages": [], "count": 0, "visibility": "private"},
+                }
+
+            shared_thread_id = self._ensure_chat_thread_locked(conn, paper_id, "shared", None)
+            shared_messages = self._chat_messages_for_thread_locked(conn, shared_thread_id, limit=16)
+            shared_count = int(
+                conn.execute("SELECT COUNT(*) FROM chat_messages WHERE thread_id = ?", (shared_thread_id,)).fetchone()[0]
+            )
+            private_messages: list[TeamChatMessage] = []
+            private_count = 0
+            if current_user_id is not None:
+                private_thread_id = self._ensure_chat_thread_locked(conn, paper_id, "private", current_user_id)
+                private_messages = self._chat_messages_for_thread_locked(conn, private_thread_id, limit=16)
+                private_count = int(
+                    conn.execute("SELECT COUNT(*) FROM chat_messages WHERE thread_id = ?", (private_thread_id,)).fetchone()[0]
+                )
+        return {
+            "shared": {"messages": shared_messages, "count": shared_count, "visibility": "shared"},
+            "private": {"messages": private_messages, "count": private_count, "visibility": "private"},
+        }
 
     def paper_context(self, rel_path: str, current_user_id: int | None = None) -> dict[str, Any]:
         with self._connect() as conn:

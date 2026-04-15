@@ -54,11 +54,43 @@
         </div>
         <div class="team-note-list">
           {% for user in team_users %}
-            <div class="team-note-item">
-              <strong>{{ user.display_name }}</strong>
-              <p>{{ user.username }} · {{ user.role }}</p>
-              <small>{{ user.created_at }}</small>
-            </div>
+            <form class="prompt-form team-user-form" action="{{ url_for('team_user_update_route') }}" method="post">
+              <input type="hidden" name="folder" value="{{ current_folder }}">
+              <input type="hidden" name="q" value="{{ query }}">
+              <input type="hidden" name="sort" value="{{ sort_by }}">
+              <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+              <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
+              <input type="hidden" name="tab" value="{{ selected_tab }}">
+              <input type="hidden" name="user_id" value="{{ user.id }}">
+              <div class="prompt-card-head compact-head">
+                <div>
+                  <strong>{{ user.username }}</strong>
+                  <span>创建于 {{ user.created_at }}</span>
+                </div>
+                <span>{{ user.role }} · {{ '启用中' if user.is_active else '已停用' }}</span>
+              </div>
+              <label>
+                <span>显示名</span>
+                <input type="text" name="display_name" value="{{ user.display_name }}">
+              </label>
+              <label>
+                <span>角色</span>
+                <select name="role">
+                  <option value="member" {% if user.role == 'member' %}selected{% endif %}>member</option>
+                  <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>admin</option>
+                </select>
+              </label>
+              <label class="checkbox-line">
+                <input type="checkbox" name="is_active" {% if user.is_active %}checked{% endif %}> 启用账号
+              </label>
+              <label>
+                <span>重置密码</span>
+                <input type="password" name="new_password" placeholder="留空表示不修改">
+              </label>
+              <div class="tool-actions split-actions">
+                <button type="submit">保存成员设置</button>
+              </div>
+            </form>
           {% else %}
             <p class="team-empty-copy">还没有团队成员。</p>
           {% endfor %}

@@ -283,6 +283,59 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertEqual(login.status_code, 302)
         self.assertEqual(login.headers["Location"], "/")
 
+    def test_admin_can_update_member_password_role_and_status(self) -> None:
+        self.app.team_store.create_user("alice", "Alice", "alice-pass-123", "member")
+        alice = self.app.team_store.get_user_by_username("alice")
+        assert alice is not None
+
+        response = self.client.post(
+            "/team/users/update",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "paper": "",
+                "tab": "source",
+                "user_id": str(alice.id),
+                "display_name": "Alice Chen",
+                "role": "admin",
+                "is_active": "on",
+                "new_password": "new-pass-456",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        updated = self.app.team_store.get_user_by_username("alice")
+        self.assertIsNotNone(updated)
+        assert updated is not None
+        self.assertEqual(updated.display_name, "Alice Chen")
+        self.assertEqual(updated.role, "admin")
+        self.assertIsNone(self.app.team_store.authenticate_user("alice", "alice-pass-123"))
+        self.assertIsNotNone(self.app.team_store.authenticate_user("alice", "new-pass-456"))
+
+        deactivate = self.client.post(
+            "/team/users/update",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "paper": "",
+                "tab": "source",
+                "user_id": str(alice.id),
+                "display_name": "Alice Chen",
+                "role": "admin",
+            },
+            follow_redirects=True,
+        )
+
+        self.assertEqual(deactivate.status_code, 200)
+        deactivated = self.app.team_store.get_user_by_username("alice")
+        self.assertIsNotNone(deactivated)
+        assert deactivated is not None
+        self.assertFalse(deactivated.is_active)
+        self.assertIsNone(self.app.team_store.authenticate_user("alice", "new-pass-456"))
+
     def test_member_cannot_edit_prompts(self) -> None:
         self.app.team_store.create_user("alice", "Alice", "alice-pass-123", "member")
         client = self.app.test_client()
@@ -309,6 +362,65 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("管理员权限", response.get_data(as_text=True))
         self.assertIsNone(self.app.prompt_store.get_prompt("method-breakdown"))
+
+    def test_member_upload_uses_managed_inbox_and_cannot_rename_files(self) -> None:
+        self.app.team_store.create_user("alice", "Alice", "alice-pass-123", "member")
+        client = self.app.test_client()
+        self.login_client_as(client, "alice")
+
+        upload_bytes = io.BytesIO()
+        writer = PdfWriter()
+        writer.add_blank_page(width=72, height=72)
+        writer.write(upload_bytes)
+        upload_bytes.seek(0)
+
+        with patch.object(
+            self.app.job_queue,
+            "submit",
+            return_value={"queued": 1, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []},
+        ) as mocked:
+            response = client.post(
+                "/upload-file",
+                data={
+                    "target_folder": "secret/admin-only",
+                    "folder": "",
+                    "q": "",
+                    "sort": "date_desc",
+                    "file": (upload_bytes, "single.pdf"),
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json["saved_rel_path"], "TeamInbox/alice/single.pdf")
+        mocked.assert_called_once_with(
+            ["TeamInbox/alice/single.pdf"],
+            ["core-zh"],
+            force=False,
+            source="upload",
+            requested_by_user_id=ANY,
+            requested_by_display_name="Alice",
+        )
+
+        rename_response = client.post(
+            "/rename",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "show_done": "",
+                "tab": "source",
+                "rel_path": "TeamInbox/alice/single.pdf",
+                "new_name": "renamed.pdf",
+            },
+            follow_redirects=True,
+        )
+        html = rename_response.get_data(as_text=True)
+
+        self.assertEqual(rename_response.status_code, 200)
+        self.assertIn("管理员权限", html)
+        self.assertTrue((self.library / "TeamInbox" / "alice" / "single.pdf").exists())
+        self.assertFalse((self.library / "TeamInbox" / "alice" / "renamed.pdf").exists())
 
     def test_team_metadata_is_visible_and_searchable(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Robot Policy")
@@ -379,6 +491,153 @@ class PaperReaderAppTests(unittest.TestCase):
 
         search_response = self.client.get("/?q=robotics")
         self.assertIn("Robot Policy", search_response.get_data(as_text=True))
+
+    def test_shared_and_private_chat_threads_are_persisted_separately(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Chat Paper")
+        self.app.team_store.create_user("alice", "Alice", "alice-pass-123", "member")
+        alice_client = self.app.test_client()
+        self.login_client_as(alice_client, "alice")
+
+        replies = iter(["团队共享回答", "私人回答"])
+
+        def complete_chat(**kwargs):
+            self.app.team_store.update_chat_message(
+                kwargs["assistant_message_id"],
+                body=next(replies),
+                status="completed",
+                model="gpt-5.4",
+            )
+
+        with patch.object(self.app.chat_queue, "submit", side_effect=complete_chat):
+            shared_response = self.client.post(
+                "/chat/send",
+                data={
+                    "folder": "",
+                    "q": "",
+                    "sort": "date_desc",
+                    "show_done": "",
+                    "rel_path": "paper.pdf",
+                    "tab": "source",
+                    "visibility": "shared",
+                    "body": "这篇论文的重点是什么？",
+                },
+                headers={"X-Requested-With": "fetch"},
+            )
+            private_response = self.client.post(
+                "/chat/send",
+                data={
+                    "folder": "",
+                    "q": "",
+                    "sort": "date_desc",
+                    "show_done": "",
+                    "rel_path": "paper.pdf",
+                    "tab": "source",
+                    "visibility": "private",
+                    "body": "只给我的复现建议是什么？",
+                },
+                headers={"X-Requested-With": "fetch"},
+            )
+
+        self.assertEqual(shared_response.status_code, 200)
+        self.assertEqual(private_response.status_code, 200)
+        shared_payload = shared_response.get_json()
+        private_payload = private_response.get_json()
+        assert shared_payload is not None
+        assert private_payload is not None
+        self.assertIn("团队共享回答", str(shared_payload["context"]))
+        self.assertIn("私人回答", str(private_payload["context"]))
+
+        admin_html = self.client.get("/?paper=paper.pdf&tab=source").get_data(as_text=True)
+        self.assertIn("团队共享回答", admin_html)
+        self.assertIn("私人回答", admin_html)
+        self.assertIn("Shared Chat", admin_html)
+        self.assertIn("Private Chat", admin_html)
+
+        alice_html = alice_client.get("/?paper=paper.pdf&tab=source").get_data(as_text=True)
+        self.assertIn("团队共享回答", alice_html)
+        self.assertNotIn("私人回答", alice_html)
+
+        context_response = self.client.get("/chat/context?paper=paper.pdf")
+        self.assertEqual(context_response.status_code, 200)
+        context_payload = context_response.get_json()
+        assert context_payload is not None
+        self.assertIn("团队共享回答", str(context_payload["shared"]))
+
+    def test_chat_send_route_returns_pending_context_for_async_polling(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Async Chat Paper")
+
+        with patch.object(self.app.chat_queue, "submit", return_value=None) as mocked:
+            response = self.client.post(
+                "/chat/send",
+                data={
+                    "folder": "",
+                    "q": "",
+                    "sort": "date_desc",
+                    "show_done": "",
+                    "rel_path": "paper.pdf",
+                    "tab": "source",
+                    "visibility": "private",
+                    "body": "请总结这篇论文的核心贡献",
+                },
+                headers={"X-Requested-With": "fetch"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        assert payload is not None
+        self.assertTrue(payload["ok"])
+        self.assertIn("Paper Bot 正在思考...", str(payload["context"]["private"]))
+        self.assertIn("pending", str(payload["context"]["private"]))
+        mocked.assert_called_once()
+
+        context_response = self.client.get("/chat/context?paper=paper.pdf")
+        self.assertEqual(context_response.status_code, 200)
+        context_payload = context_response.get_json()
+        assert context_payload is not None
+        self.assertIn("Paper Bot 正在思考...", str(context_payload["private"]))
+        self.assertIn("pending", str(context_payload["private"]))
+
+    def test_chat_context_eventually_shows_background_reply(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Background Chat Paper")
+
+        def delayed_answer(*args, **kwargs):
+            time.sleep(0.15)
+            return "后台线程回答完成"
+
+        with patch("src.paper_reader.chat_queue.answer_question_about_document", side_effect=delayed_answer):
+            response = self.client.post(
+                "/chat/send",
+                data={
+                    "folder": "",
+                    "q": "",
+                    "sort": "date_desc",
+                    "show_done": "",
+                    "rel_path": "paper.pdf",
+                    "tab": "source",
+                    "visibility": "shared",
+                    "body": "请给我一个简短总结",
+                },
+                headers={"X-Requested-With": "fetch"},
+            )
+
+            self.assertEqual(response.status_code, 200)
+            initial_payload = response.get_json()
+            assert initial_payload is not None
+            self.assertIn("pending", str(initial_payload["context"]["shared"]))
+
+            completed_payload = None
+            for _ in range(40):
+                poll = self.client.get("/chat/context?paper=paper.pdf")
+                self.assertEqual(poll.status_code, 200)
+                completed_payload = poll.get_json()
+                assert completed_payload is not None
+                if "后台线程回答完成" in str(completed_payload["shared"]):
+                    break
+                time.sleep(0.05)
+
+        assert completed_payload is not None
+        self.assertIn("后台线程回答完成", str(completed_payload["shared"]))
+        self.assertIn("completed", str(completed_payload["shared"]))
 
     def test_index_lists_existing_pdf_docx_and_default_prompt(self) -> None:
         self.make_pdf(self.library / "2501.12948.pdf", "DeepSeek-R1")
@@ -643,7 +902,13 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn('aria-hidden="true"', html)
         self.assertIn('aria-label="折叠阅读区"', html)
         self.assertIn("settings-user-card", html)
-        self.assertIn("推荐优先展示", html)
+        self.assertIn('data-collapsible-toggle="tags"', html)
+        self.assertIn('data-collapsible-body="tags"', html)
+        self.assertIn("data-chat-form", html)
+        self.assertIn("打开这篇论文后，推荐、标签、讨论和聊天都会集中显示在这里。", html)
+        self.assertIn("这里会显示大家围绕这篇论文的聊天记录；只要打开这篇论文，所有人都能看到。", html)
+        self.assertIn("发到共享聊天", html)
+        self.assertNotIn("团队视角", html)
 
     def test_workspace_styles_support_dragging_and_mobile_collapses(self) -> None:
         css = (Path(self.app.static_folder) / "style.css").read_text(encoding="utf-8")

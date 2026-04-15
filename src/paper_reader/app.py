@@ -22,6 +22,7 @@ from markupsafe import Markup
 from werkzeug.utils import secure_filename
 
 from .ai_summary import DEFAULT_MODEL, DEFAULT_USER_PROMPT, run_prompt_on_document
+from .chat_queue import PaperChatQueue
 from .document_utils import ALLOWED_EXTENSIONS, extract_document_metadata
 from .markdown_render import render_markdown
 from .offline_package import build_offline_manifest, manifest_json as build_manifest_json, offline_prompt_arcname, offline_source_arcname
@@ -1238,6 +1239,17 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             return None
         return user
 
+    def default_member_submission_folder(user: TeamUser | None) -> str:
+        if user is None:
+            return "TeamInbox"
+        safe_username = secure_filename(user.username) or f"user-{user.id}"
+        return f"TeamInbox/{safe_username}"
+
+    def resolve_upload_target_folder(actor: TeamUser | None, raw_target: str) -> str:
+        if actor is not None and actor.role != "admin":
+            return default_member_submission_folder(actor)
+        return raw_target.strip().strip("/")
+
     def start_user_session(user: TeamUser) -> None:
         session["authenticated"] = True
         session["user_id"] = user.id
@@ -1253,6 +1265,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             "allowed_extensions": ", ".join(sorted(ALLOWED_EXTENSIONS)),
             "current_user": user,
             "is_admin": bool(user and user.role == "admin"),
+            "member_submission_folder": default_member_submission_folder(user),
         }
 
     @app.before_request
@@ -1656,6 +1669,34 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 generated_at=generated_at,
             )
 
+    def load_chat_prompt_contexts(rel_path: str, prompts: list[PromptDefinition]) -> list[tuple[str, str]]:
+        contexts: list[tuple[str, str]] = []
+        for prompt in prompts:
+            content = app.library.read_prompt_result(rel_path, prompt.slug)  # type: ignore[attr-defined]
+            if not content:
+                continue
+            contexts.append((prompt.name, content[:4000]))
+            if len(contexts) >= 3:
+                break
+        return contexts
+
+    def serialize_chat_context(context: dict[str, Any]) -> dict[str, Any]:
+        return {
+            visibility: {
+                "count": int(thread.get("count", 0)),
+                "visibility": thread.get("visibility", visibility),
+                "messages": [asdict(message) for message in thread.get("messages", [])],
+            }
+            for visibility, thread in context.items()
+        }
+
+    app.chat_queue = PaperChatQueue(  # type: ignore[attr-defined]
+        library=app.library,
+        prompt_store=app.prompt_store,
+        team_store=app.team_store,
+        prompt_context_loader=load_chat_prompt_contexts,
+    )
+
     def build_batch_papers(
         *,
         folder: str,
@@ -1788,11 +1829,19 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             "prompt_runs": [],
             "sources": [],
         }
+        selected_chat_context: dict[str, Any] = {
+            "shared": {"messages": [], "count": 0, "visibility": "shared"},
+            "private": {"messages": [], "count": 0, "visibility": "private"},
+        }
 
         if selected_paper:
             if selected_paper.preview_text:
                 preview_paragraphs = [chunk.strip() for chunk in selected_paper.preview_text.split("\n\n") if chunk.strip()]
             selected_paper_context = app.team_store.paper_context(  # type: ignore[attr-defined]
+                selected_paper.rel_path,
+                current_user_id(),
+            )
+            selected_chat_context = app.team_store.chat_context(  # type: ignore[attr-defined]
                 selected_paper.rel_path,
                 current_user_id(),
             )
@@ -1845,6 +1894,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             selected_prompt_info=selected_prompt_info,
             selected_prompt_job=selected_prompt_job,
             selected_paper_context=selected_paper_context,
+            selected_chat_context=selected_chat_context,
             active_prompts=active_prompts,
             active_prompt_count=len(active_prompts),
             library_root=app.config["LIBRARY_ROOT"],
@@ -1913,8 +1963,11 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     @app.post("/upload")
     def upload() -> Any:
         files = request.files.getlist("files")
-        target_folder = request.form.get("target_folder", "").strip().strip("/")
+        actor = current_user()
+        target_folder = resolve_upload_target_folder(actor, request.form.get("target_folder", ""))
         current_folder = request.form.get("folder", target_folder or "").strip().strip("/")
+        if actor is not None and actor.role != "admin":
+            current_folder = target_folder
         query = request.form.get("q", "")
         sort_by = request.form.get("sort", "date_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
@@ -1976,8 +2029,11 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     @app.post("/upload-file")
     def upload_file() -> Any:
         file = request.files.get("file")
-        target_folder = request.form.get("target_folder", "").strip().strip("/")
+        actor = current_user()
+        target_folder = resolve_upload_target_folder(actor, request.form.get("target_folder", ""))
         current_folder = request.form.get("folder", target_folder or "").strip().strip("/")
+        if actor is not None and actor.role != "admin":
+            current_folder = target_folder
         query = request.form.get("q", "")
         sort_by = request.form.get("sort", "date_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
@@ -2011,6 +2067,9 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
+        admin_user = require_admin_user()
+        if admin_user is None:
+            return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
         folder_name = request.form.get("new_folder", "").strip()
         parent_folder = request.form.get("parent_folder", "").strip().strip("/")
         target = "/".join(part for part in [parent_folder, folder_name] if part)
@@ -2029,6 +2088,9 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         show_done = parse_checkbox(request.form.get("show_done"))
         tab = request.form.get("tab", "source")
         rel_path = request.form.get("rel_path", "").strip("/")
+        admin_user = require_admin_user()
+        if admin_user is None:
+            return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
         new_name = request.form.get("new_name", "").strip()
         try:
             new_rel_path = app.library.rename_file(rel_path, new_name)  # type: ignore[attr-defined]
@@ -2048,6 +2110,9 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         sort_by = request.form.get("sort", "date_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         rel_path = request.form.get("rel_path", "").strip("/")
+        admin_user = require_admin_user()
+        if admin_user is None:
+            return redirect_to_index(current_folder, query, sort_by, rel_path or None, "source", show_done=show_done)
         try:
             app.library.delete_file(rel_path)  # type: ignore[attr-defined]
             app.team_store.delete_paper(rel_path)  # type: ignore[attr-defined]
@@ -2194,6 +2259,32 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             flash(str(exc), "error")
         return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
 
+    @app.post("/team/users/update")
+    def team_user_update_route() -> Any:
+        current_folder = request.form.get("folder", "")
+        query = request.form.get("q", "")
+        sort_by = request.form.get("sort", "date_desc")
+        show_done = parse_checkbox(request.form.get("show_done"))
+        selected_paper = request.form.get("paper", "") or None
+        tab = request.form.get("tab", "source")
+        admin_user = require_admin_user()
+        if admin_user is None:
+            return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
+        try:
+            user_id = int(request.form.get("user_id", "0") or 0)
+            updated_user = app.team_store.update_user(  # type: ignore[attr-defined]
+                user_id,
+                display_name=request.form.get("display_name", ""),
+                role_slug=request.form.get("role", "member") or "member",
+                is_active=parse_checkbox(request.form.get("is_active")),
+                password=request.form.get("new_password", ""),
+                acting_user_id=admin_user.id,
+            )
+            flash(f"成员 {updated_user.display_name} 已更新。", "success")
+        except (FileNotFoundError, ValueError) as exc:
+            flash(str(exc), "error")
+        return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
+
     @app.post("/recommend")
     def recommend_route() -> Any:
         current_folder = request.form.get("folder", "")
@@ -2253,6 +2344,81 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             app.team_store.add_comment(rel_path, actor.id, request.form.get("body", ""), parent_id=parent_id)  # type: ignore[attr-defined]
             flash("评论已发布。", "success")
         except (ValueError, FileNotFoundError) as exc:
+            flash(str(exc), "error")
+        return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+
+    @app.get("/chat/context")
+    def chat_context_route() -> Any:
+        rel_path = request.args.get("paper", "").strip("/")
+        actor = current_user()
+        if actor is None:
+            return {"error": "unauthorized"}, 401
+        if not rel_path:
+            return {"error": "missing paper"}, 400
+        return serialize_chat_context(app.team_store.chat_context(rel_path, actor.id))  # type: ignore[attr-defined]
+
+    @app.post("/chat/send")
+    def chat_send_route() -> Any:
+        current_folder = request.form.get("folder", "")
+        query = request.form.get("q", "")
+        sort_by = request.form.get("sort", "date_desc")
+        show_done = parse_checkbox(request.form.get("show_done"))
+        rel_path = request.form.get("rel_path", "").strip("/")
+        tab = request.form.get("tab", "source")
+        visibility = request.form.get("visibility", "shared").strip().lower() or "shared"
+        wants_json = request.headers.get("X-Requested-With") == "fetch"
+        actor = current_user()
+        if actor is None:
+            if wants_json:
+                return {"error": "unauthorized"}, 401
+            flash("请先登录。", "error")
+            return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+        message_body = request.form.get("body", "")
+        try:
+            ensure_paper_metadata(rel_path)
+            user_message_id = app.team_store.add_chat_message(  # type: ignore[attr-defined]
+                rel_path,
+                visibility=visibility,
+                body=message_body,
+                user_id=actor.id,
+                role="user",
+            )
+            history = app.team_store.chat_history(  # type: ignore[attr-defined]
+                rel_path,
+                visibility=visibility,
+                current_user_id=actor.id,
+                limit=10,
+            )
+            assistant_message_id = app.team_store.add_chat_message(  # type: ignore[attr-defined]
+                rel_path,
+                visibility=visibility,
+                body="Paper Bot 正在思考...",
+                user_id=actor.id if visibility == "private" else None,
+                role="assistant",
+                status="pending",
+                model=DEFAULT_MODEL,
+            )
+            app.chat_queue.submit(  # type: ignore[attr-defined]
+                rel_path=rel_path,
+                visibility=visibility,
+                user_id=actor.id,
+                display_name=actor.display_name,
+                question=message_body.strip(),
+                history=history,
+                assistant_message_id=assistant_message_id,
+                model=DEFAULT_MODEL,
+            )
+            if wants_json:
+                return {
+                    "ok": True,
+                    "user_message_id": user_message_id,
+                    "assistant_message_id": assistant_message_id,
+                    "context": serialize_chat_context(app.team_store.chat_context(rel_path, actor.id)),  # type: ignore[attr-defined]
+                }
+            flash("消息已发送给 Paper Bot。", "success")
+        except (FileNotFoundError, ValueError) as exc:
+            if wants_json:
+                return {"error": str(exc)}, 400
             flash(str(exc), "error")
         return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
 
@@ -2591,6 +2757,9 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
+        admin_user = require_admin_user()
+        if admin_user is None:
+            return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
         requested = request.form.get("max_concurrency", "")
         try:
             value = app.settings_store.save_max_concurrency(int(requested))  # type: ignore[attr-defined]
@@ -2610,6 +2779,9 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
+        admin_user = require_admin_user()
+        if admin_user is None:
+            return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
         summary = app.job_queue.stop_all()  # type: ignore[attr-defined]
         interrupted = summary["queued"] + summary["running"]
         if interrupted:
@@ -2638,6 +2810,9 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         show_done = parse_checkbox(request.form.get("show_done"))
         selected_paper = request.form.get("paper", "") or None
         tab = request.form.get("tab", "source")
+        admin_user = require_admin_user()
+        if admin_user is None:
+            return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
         active_records = app.library.rebuild_active_index(lightweight=True)  # type: ignore[attr-defined]
         done_records = app.library.rebuild_done_index(lightweight=True)  # type: ignore[attr-defined]
         flash(

@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+import queue
+import threading
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+from .ai_summary import DEFAULT_MODEL
+from .chat_ai import answer_question_about_document
+
+MAX_CHAT_WORKERS = 1
+
+
+@dataclass(slots=True)
+class ChatJob:
+    rel_path: str
+    visibility: str
+    user_id: int
+    display_name: str
+    question: str
+    history: list[dict[str, str]]
+    assistant_message_id: int
+    model: str
+
+
+class PaperChatQueue:
+    def __init__(
+        self,
+        *,
+        library: Any,
+        prompt_store: Any,
+        team_store: Any,
+        prompt_context_loader: Callable[[str, list[Any]], list[tuple[str, str]]],
+        worker_count: int = MAX_CHAT_WORKERS,
+    ) -> None:
+        self.library = library
+        self.prompt_store = prompt_store
+        self.team_store = team_store
+        self.prompt_context_loader = prompt_context_loader
+        self._queue: queue.Queue[ChatJob] = queue.Queue()
+        self.team_store.mark_pending_chat_messages_failed()
+        self._workers: list[threading.Thread] = []
+        for index in range(max(1, int(worker_count))):
+            worker = threading.Thread(target=self._run_loop, name=f"paper-reader-chat-{index + 1}", daemon=True)
+            worker.start()
+            self._workers.append(worker)
+
+    def submit(
+        self,
+        *,
+        rel_path: str,
+        visibility: str,
+        user_id: int,
+        display_name: str,
+        question: str,
+        history: list[dict[str, str]],
+        assistant_message_id: int,
+        model: str = DEFAULT_MODEL,
+    ) -> None:
+        self._queue.put(
+            ChatJob(
+                rel_path=rel_path,
+                visibility=visibility,
+                user_id=user_id,
+                display_name=display_name,
+                question=question,
+                history=history,
+                assistant_message_id=assistant_message_id,
+                model=model or DEFAULT_MODEL,
+            )
+        )
+
+    def _run_loop(self) -> None:
+        while True:
+            job = self._queue.get()
+            try:
+                self._process_job(job)
+            finally:
+                self._queue.task_done()
+
+    def _process_job(self, job: ChatJob) -> None:
+        try:
+            document_path = Path(self.library.resolve_relative_path(job.rel_path))
+            prompt_contexts = self.prompt_context_loader(job.rel_path, self.prompt_store.list_prompts())
+            answer = answer_question_about_document(
+                document_path,
+                question=job.question,
+                visibility=job.visibility,
+                history=job.history,
+                prompt_contexts=prompt_contexts,
+                model=job.model,
+            )
+            self.team_store.update_chat_message(
+                job.assistant_message_id,
+                body=answer,
+                status="completed",
+                model=job.model,
+            )
+        except Exception as exc:
+            error_text = str(exc)
+            if "429" in error_text or "Too Many Requests" in error_text:
+                body = "Paper Bot 当前有点忙，刚刚触发了速率限制。请稍等十几秒后重试这条问题。"
+            else:
+                body = f"本次回答失败：{error_text}"
+            self.team_store.update_chat_message(
+                job.assistant_message_id,
+                body=body,
+                status="failed",
+                model=job.model,
+            )
