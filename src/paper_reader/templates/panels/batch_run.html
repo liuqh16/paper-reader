@@ -14,7 +14,7 @@
     <input type="hidden" name="batch_page" value="1">
     <label class="checkbox-line batch-toggle-line">
       <input type="checkbox" name="batch_show_done" value="1" {% if batch_show_done %}checked{% endif %} onchange="this.form.requestSubmit()">
-      批量列表包含 DONE 文件夹里的论文
+      把 DONE 里的论文也加入这次批量生成
     </label>
   </form>
 
@@ -30,19 +30,19 @@
       <input type="hidden" name="tab" value="{{ selected_tab }}">
 
       <div class="tool-hint batch-summary-line">
-        当前显示第 {{ batch_pagination.start_index }}-{{ batch_pagination.end_index }} 篇，共 {{ batch_pagination.total }} 篇
+        这次会从第 {{ batch_pagination.start_index }}-{{ batch_pagination.end_index }} 篇里选，共 {{ batch_pagination.total }} 篇
         {% if batch_pagination.total_pages > 1 %}
           · 第 {{ batch_pagination.page }}/{{ batch_pagination.total_pages }} 页
         {% endif %}
       </div>
-      <div class="tool-hint batch-scope-hint" data-batch-scope-hint>默认只提交当前勾选的论文；也可以切换到“全选全部匹配结果”的状态。</div>
+      <div class="tool-hint batch-scope-hint" data-batch-scope-hint>默认只处理你手动勾选的论文；也可以切换成“全选全部匹配结果”。</div>
 
       <div class="batch-grid">
         <section class="batch-column">
           <div class="batch-head">
             <div>
-              <strong>选择 Prompt</strong>
-              <span>默认会跳过已跑过的组合</span>
+              <strong>选择分析模板</strong>
+              <span>已经生成过的结果会自动跳过</span>
             </div>
             <div class="batch-head-actions">
               <button type="button" class="ghost mini-action" data-check-action="all" data-check-group="prompt">全选</button>
@@ -66,7 +66,7 @@
           <div class="batch-head">
             <div>
               <strong>选择论文</strong>
-              <span>当前按照上方筛选条件展示</span>
+              <span>这里显示的是当前筛选条件下的论文</span>
             </div>
             <div class="batch-head-actions">
               <label class="checkbox-line batch-select-all-toggle" data-batch-select-all-toggle>
@@ -121,13 +121,13 @@
         </section>
       </div>
 
-      <label class="checkbox-line batch-force-line"><input type="checkbox" name="force"> 强制重跑已生成过的 Prompt 结果</label>
-      <div class="tool-hint">不勾选“强制重跑”时，系统只会对尚未执行过的文件 / Prompt 组合发起模型请求，避免重复成本。</div>
+      <label class="checkbox-line batch-force-line"><input type="checkbox" name="force"> 重新生成已经有结果的论文</label>
+      <div class="tool-hint">如果不勾选，系统只会处理还没生成过的组合，避免重复消耗时间和额度。</div>
       <div class="tool-actions">
-        <button type="submit">批量运行所选 Prompt</button>
+        <button type="submit">批量生成所选结果</button>
       </div>
     </form>
   {% else %}
-    <p class="empty-inline">当前没有符合筛选条件的论文，无法批量处理。</p>
+    <p class="empty-inline">当前筛选结果里没有论文可处理。</p>
   {% endif %}
 </div>

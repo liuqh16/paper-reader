@@ -2,15 +2,15 @@
   {% if not can_manage_team %}
     <div class="library-box">
       <span class="meta-label">权限</span>
-      <strong>团队成员管理仅管理员可操作。</strong>
+      <strong>只有管理员可以添加账号、调整角色和重置密码。</strong>
     </div>
   {% else %}
     <div class="prompt-manager-grid">
       <section class="prompt-card new-prompt-card">
         <div class="prompt-card-head">
           <div>
-            <strong>创建团队成员</strong>
-            <span>MVP 只支持管理员手动创建账号</span>
+            <strong>添加账号</strong>
+            <span>由管理员统一创建大家可登录的账号</span>
           </div>
         </div>
         <form class="prompt-form" action="{{ url_for('team_user_save_route') }}" method="post">
@@ -29,11 +29,11 @@
             <input type="text" name="display_name" placeholder="例如：Alice">
           </label>
           <label>
-            <span>初始密码</span>
-            <input type="password" name="password" placeholder="设置一个初始密码">
+            <span>登录密码</span>
+            <input type="password" name="password" placeholder="先设置一个初始密码">
           </label>
           <label>
-            <span>角色</span>
+            <span>身份</span>
             <select name="role">
               <option value="member">member</option>
               <option value="admin">admin</option>
@@ -48,7 +48,7 @@
       <section class="prompt-card">
         <div class="prompt-card-head">
           <div>
-            <strong>当前成员</strong>
+            <strong>账号列表</strong>
             <span>{{ team_users|length }} 人</span>
           </div>
         </div>
@@ -67,32 +67,32 @@
                   <strong>{{ user.username }}</strong>
                   <span>创建于 {{ user.created_at }}</span>
                 </div>
-                <span>{{ user.role }} · {{ '启用中' if user.is_active else '已停用' }}</span>
+                <span>{{ user.role }} · {{ '可以登录' if user.is_active else '已停用' }}</span>
               </div>
               <label>
                 <span>显示名</span>
                 <input type="text" name="display_name" value="{{ user.display_name }}">
               </label>
               <label>
-                <span>角色</span>
+                <span>身份</span>
                 <select name="role">
                   <option value="member" {% if user.role == 'member' %}selected{% endif %}>member</option>
                   <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>admin</option>
                 </select>
               </label>
               <label class="checkbox-line">
-                <input type="checkbox" name="is_active" {% if user.is_active %}checked{% endif %}> 启用账号
+                <input type="checkbox" name="is_active" {% if user.is_active %}checked{% endif %}> 保持可登录
               </label>
               <label>
                 <span>重置密码</span>
                 <input type="password" name="new_password" placeholder="留空表示不修改">
               </label>
               <div class="tool-actions split-actions">
-                <button type="submit">保存成员设置</button>
+                <button type="submit">保存账号设置</button>
               </div>
             </form>
           {% else %}
-            <p class="team-empty-copy">还没有团队成员。</p>
+            <p class="team-empty-copy">还没有添加账号。</p>
           {% endfor %}
         </div>
       </section>

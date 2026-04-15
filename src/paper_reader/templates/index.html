@@ -114,7 +114,7 @@
     {% else %}
       <div class="compact-empty" id="paper-list-empty">
         <h3>没有匹配结果</h3>
-        <p>可以通过右上角圆形 logo 打开控制中心，导入或上传论文。</p>
+        <p>试试换个关键词，或者点右下角圆形按钮导入、上传论文。</p>
       </div>
     {% endif %}
   </aside>
@@ -125,20 +125,20 @@
     <div class="viewer-toolbar viewer-toolbar-slim">
       <div class="viewer-toolbar-copy">
         {% if selected_paper %}
-          <p class="eyebrow">Reader</p>
+          <p class="eyebrow">论文阅读</p>
           <h2>{{ selected_paper.display_title }}</h2>
           <p class="viewer-subtitle">{{ selected_paper.file_name }} · {{ format_bytes(selected_paper.file_size) }}</p>
         {% else %}
-          <p class="eyebrow">Reader</p>
-          <h2>Team Reader</h2>
-          <p class="viewer-subtitle">选中一篇论文后，在这里快速阅读正文或 Prompt 结果。</p>
+          <p class="eyebrow">论文阅读</p>
+          <h2>原文与解读</h2>
+          <p class="viewer-subtitle">选中一篇论文后，这里会显示原文和已经生成的分析结果。</p>
         {% endif %}
       </div>
       <div class="viewer-toolbar-status">
         {% if selected_paper %}
-          <span class="viewer-status-pill">{{ selected_paper.prompt_result_count }}/{{ active_prompt_count }} Prompt</span>
+          <span class="viewer-status-pill">{{ selected_paper.prompt_result_count }}/{{ active_prompt_count }} 份解读</span>
         {% else %}
-          <span class="viewer-status-pill">Ready</span>
+          <span class="viewer-status-pill">等你打开一篇论文</span>
         {% endif %}
         <button type="button" class="icon-button pane-toggle" data-pane-button="center" data-toggle-pane="center" title="折叠阅读区" aria-label="折叠阅读区">
           <span class="icon-shell" aria-hidden="true">
@@ -167,7 +167,7 @@
           class="viewer-tab {% if selected_tab == 'source' %}active{% endif %}"
           href="{{ url_for('index', folder=current_folder, q=query, sort=sort_by, paper=selected_paper.rel_path, tab='source', show_done='1' if show_done else None) }}"
         >
-          源文件
+          原文
         </a>
         {% for tab in viewer_tabs %}
           <a
@@ -177,13 +177,13 @@
             <span>{{ tab.name }}</span>
             <small>
               {% if tab.job_status == 'running' %}
-                处理中 {{ tab.job_progress }}%
+                生成中 {{ tab.job_progress }}%
               {% elif tab.job_status == 'queued' %}
-                已排队
+                等待生成
               {% elif tab.exists %}
                 已生成
               {% else %}
-                未应用
+                还没生成
               {% endif %}
             </small>
           </a>
@@ -196,8 +196,8 @@
             <div class="source-viewer">
               <div class="source-viewer-head">
                 <div>
-                  <strong>源文件</strong>
-                  <span>中间区域优先保留给正文预览</span>
+                  <strong>原文</strong>
+                  <span>这里会直接显示论文正文</span>
                 </div>
                 <div class="prompt-viewer-actions">
                   <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
@@ -209,8 +209,8 @@
             <div class="source-viewer source-text-viewer">
               <div class="source-viewer-head">
                 <div>
-                  <strong>源文件</strong>
-                  <span>Word 文档预览</span>
+                  <strong>原文</strong>
+                  <span>这里显示 Word 文档内容</span>
                 </div>
                 <div class="prompt-viewer-actions">
                   <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
@@ -228,23 +228,23 @@
             <div class="source-viewer source-text-viewer">
               <div class="source-viewer-head">
                 <div>
-                  <strong>源文件</strong>
-                  <span>DOC 文件预览</span>
+                  <strong>原文</strong>
+                  <span>这里显示 DOC 文件信息</span>
                 </div>
                 <div class="prompt-viewer-actions">
                   <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
                 </div>
               </div>
               <div class="source-viewer-body docx-preview wide">
-                <p>当前环境会索引 `.doc` 的标题和文件信息，但不能像 PDF / `.docx` 一样直接提取正文。</p>
+                <p>现在会先显示 `.doc` 的标题和文件信息；如果想看正文，建议先转成 PDF 或 `.docx`。</p>
               </div>
             </div>
           {% else %}
             <div class="viewer-empty source-viewer source-empty-viewer">
               <div class="source-viewer-head">
                 <div>
-                  <strong>源文件</strong>
-                  <span>当前格式暂不支持内嵌预览</span>
+                  <strong>原文</strong>
+                  <span>这个格式暂时不能直接预览</span>
                 </div>
                 <div class="prompt-viewer-actions">
                   <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
@@ -290,7 +290,7 @@
           {% else %}
             <div class="viewer-empty prompt-empty-state">
               <h3>{{ selected_prompt.name }}</h3>
-              <p>这个 Prompt 还没有应用到当前论文上，所以这里暂时是空的。</p>
+              <p>这份解读还没生成，所以这里暂时还是空的。</p>
               {% if selected_prompt_job and selected_prompt_job.status in ['queued', 'running'] %}
                 <div class="inline-job-card" id="selected-prompt-job" data-job-id="{{ selected_prompt_job.id }}">
                   <div class="job-card-top">
@@ -308,7 +308,7 @@
                 <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
                 <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
                 <input type="hidden" name="prompt_slug" value="{{ selected_prompt.slug }}">
-                <button type="submit">立即运行这个 Prompt</button>
+                <button type="submit">现在生成这份解读</button>
               </form>
             </div>
           {% endif %}
@@ -418,7 +418,7 @@
 
       <section class="assistant-card">
         <div class="team-paper-card-head">
-          <strong>共享结果与来源</strong>
+          <strong>已有解读与来源</strong>
           <span>{{ selected_paper_context.prompt_runs|length }} 条</span>
         </div>
         <div class="team-note-list">
@@ -429,7 +429,7 @@
               <small>{% if run.generated_by_display_name %}{{ run.generated_by_display_name }} · {% endif %}{{ run.generated_at or '已生成' }}</small>
             </div>
           {% else %}
-            <p class="team-empty-copy">这篇论文还没有共享 Prompt 结果记录。</p>
+            <p class="team-empty-copy">这篇论文还没有现成的分析结果。</p>
           {% endfor %}
           {% for source in selected_paper_context.sources %}
             <div class="team-note-item muted-item">
@@ -492,13 +492,13 @@
 
       <section class="assistant-card">
         <div class="team-paper-card-head">
-          <strong>论文问答</strong>
-          <span>Shared + Private</span>
+          <strong>聊天记录</strong>
+          <span>共享 + 私人</span>
         </div>
         <div class="team-chat-grid">
           <div class="team-chat-card" data-chat-card="shared">
             <div class="team-paper-card-head compact-head">
-              <strong>Shared Chat</strong>
+              <strong>共享聊天</strong>
               <span data-chat-count="shared">{{ selected_chat_context.shared.count }} 条</span>
             </div>
             <div class="team-chat-thread" data-chat-thread="shared">
@@ -529,7 +529,7 @@
 
           <div class="team-chat-card" data-chat-card="private">
             <div class="team-paper-card-head compact-head">
-              <strong>Private Chat</strong>
+              <strong>私人聊天</strong>
               <span data-chat-count="private">{{ selected_chat_context.private.count }} 条</span>
             </div>
             <div class="team-chat-thread" data-chat-thread="private">
@@ -665,12 +665,12 @@
 <section class="bottom-tools card settings-drawer" id="settings-drawer" data-settings-drawer role="dialog" aria-modal="false" aria-labelledby="settings-drawer-title" aria-hidden="true" tabindex="-1" inert>
   <div class="tools-head settings-head">
     <div>
-      <p class="eyebrow">Control Center</p>
-      <h2 id="settings-drawer-title">管理与导入</h2>
+      <p class="eyebrow">常用操作</p>
+      <h2 id="settings-drawer-title">导入与设置</h2>
     </div>
     <div class="tools-head-actions">
-      <button type="button" class="button-link secondary" data-close-settings>关闭面板</button>
-      <a class="button-link secondary" href="{{ url_for('sources_index') }}" target="_blank" rel="noreferrer">打开 Sources 页面</a>
+      <button type="button" class="button-link secondary" data-close-settings>关闭</button>
+      <a class="button-link secondary" href="{{ url_for('sources_index') }}" target="_blank" rel="noreferrer">查看来源归档</a>
     </div>
   </div>
   {% if current_user %}
@@ -750,7 +750,7 @@
   </details>
 
   <details class="tool-panel">
-    <summary>上传与文件夹</summary>
+    <summary>上传与导入</summary>
     <div class="stacked-tool-grid">
       <form class="tool-grid upload-form-grid" id="upload-form" action="{{ url_for('upload') }}" method="post" enctype="multipart/form-data" data-upload-endpoint="{{ url_for('upload_file') }}">
         <input type="hidden" name="folder" value="{{ current_folder }}">
@@ -764,13 +764,13 @@
           </label>
         {% else %}
           <input type="hidden" name="target_folder" value="{{ member_submission_folder }}">
-          <div class="tool-hint">成员上传会自动归档到 `{{ member_submission_folder }}`，无需手动维护路径。</div>
+          <div class="tool-hint">你上传的论文会自动放进 `{{ member_submission_folder }}`，不用自己整理路径。</div>
         {% endif %}
         <label>
           <span>选择文件</span>
           <input type="file" name="files" id="upload-files" multiple accept=".pdf,.doc,.docx">
         </label>
-        <div class="tool-hint">仅允许 {{ allowed_extensions }}。上传后会自动应用所有已启用且允许自动运行的 Prompt。</div>
+        <div class="tool-hint">支持 {{ allowed_extensions }}。上传完成后，会自动开始已启用的分析。</div>
         <div class="tool-actions">
           <button type="submit" id="upload-submit">上传论文</button>
         </div>
@@ -779,7 +779,7 @@
         <div class="upload-visualizer-head">
           <div>
             <strong>上传进度</strong>
-            <span id="upload-summary-text">等待上传</span>
+            <span id="upload-summary-text">等你开始上传</span>
           </div>
           <span id="upload-overall-percent">0%</span>
         </div>
@@ -811,14 +811,14 @@
         <input type="hidden" name="sort" value="{{ sort_by }}">
         <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
         <label>
-          <span>arXiv / OpenReview / PDF 链接</span>
-          <input type="text" name="import_target" placeholder="例如：2501.12948 / https://arxiv.org/abs/... / https://...pdf">
+          <span>论文链接或 arXiv ID</span>
+          <input type="text" name="import_target" placeholder="例如：2501.12948 / arXiv 链接 / 直接 PDF 链接">
         </label>
         <label>
           <span>推荐理由（可选）</span>
           <input type="text" name="recommendation_reason" placeholder="例如：适合本周组会讨论">
         </label>
-        <div class="tool-hint">MVP 先支持 arXiv ID、arXiv 链接、OpenReview PDF 链接和直接 PDF 链接。</div>
+        <div class="tool-hint">现在支持 arXiv ID、arXiv 链接、OpenReview PDF 链接和直接 PDF 链接。</div>
         <div class="tool-actions">
           <button type="submit">导入远程论文</button>
         </div>
@@ -840,7 +840,7 @@
             <span>新文件夹名</span>
             <input type="text" name="new_folder" placeholder="例如：reading-list">
           </label>
-          <div class="tool-hint">会在当前论文库目录里创建子文件夹。</div>
+          <div class="tool-hint">会在当前论文库里新建一个文件夹，方便后面整理论文。</div>
           <div class="tool-actions">
             <button type="submit">新建文件夹</button>
           </div>
@@ -848,8 +848,8 @@
       {% else %}
         <div class="library-box">
           <span class="meta-label">上传规则</span>
-          <strong>成员上传和导入由系统自动归档。</strong>
-          <p>如果需要调整目录结构、重命名或做批量整理，请联系管理员。</p>
+          <strong>你上传和导入的论文会自动整理好。</strong>
+          <p>如果想调整目录结构、重命名文件，直接找管理员就行。</p>
         </div>
       {% endif %}
     </div>
@@ -858,7 +858,7 @@
   <details class="tool-panel">
     <summary>文件管理</summary>
     {% if not is_admin %}
-      <p class="empty-inline">文件整理、重命名、删除和重扫目录仅管理员可操作。</p>
+      <p class="empty-inline">整理文件、重命名、删除和重扫目录这些操作由管理员处理。</p>
     {% elif selected_paper %}
       <div class="stacked-tool-grid">
         <form class="tool-grid" action="{{ url_for('rename_route') }}" method="post">
@@ -876,7 +876,7 @@
             <span>新文件名</span>
             <input type="text" name="new_name" value="{{ selected_paper.file_name }}">
           </label>
-          <div class="tool-hint">重命名后会同步移动该论文已生成的 Prompt 结果文件。</div>
+          <div class="tool-hint">改名后，这篇论文已经生成的分析结果也会一起跟着更新。</div>
           <div class="tool-actions">
             <button type="submit">重命名文件</button>
           </div>
@@ -892,7 +892,7 @@
             <span class="meta-label">删除目标</span>
             <strong>{{ selected_paper.file_name }}</strong>
           </div>
-          <div class="tool-hint">会删除原文件以及这篇论文关联的所有 Prompt 结果。</div>
+          <div class="tool-hint">删除后，原文件和这篇论文关联的分析结果都会一起移除。</div>
           <div class="tool-actions">
             <button class="danger" type="submit" onclick="return confirm('确定要删除这篇论文吗？');">删除文件</button>
           </div>
@@ -905,22 +905,22 @@
           <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
           <input type="hidden" name="paper" value="{{ selected_paper.rel_path }}">
           <input type="hidden" name="tab" value="{{ selected_tab }}">
-          <div class="tool-hint">如果你在系统外手动增删改了文件，可以在这里做一次轻量文件扫描：只更新目录，不运行 Prompt，也不做重型解析。</div>
+          <div class="tool-hint">如果你刚刚在系统外移动、改名或删除过文件，可以在这里快速同步列表；不会重新跑分析。</div>
           <div class="tool-actions">
-            <button class="secondary" type="submit">快速扫描 Paper 文件夹</button>
+            <button class="secondary" type="submit">快速同步论文列表</button>
           </div>
         </form>
       </div>
     {% else %}
-      <p class="empty-inline">先在左边选中一篇论文，才能进行重命名或删除。</p>
+      <p class="empty-inline">先在左边选中一篇论文，才能整理或删除它。</p>
     {% endif %}
   </details>
 
   <details class="tool-panel">
-    <summary>后台任务</summary>
+    <summary>处理进度</summary>
     <div class="jobs-panel-head">
       <div class="jobs-controls">
-        <div class="tool-hint">任务提交后会在服务端后台持续处理；刷新页面或重新打开浏览器后仍可看到最新进度。</div>
+        <div class="tool-hint">提交后系统会继续处理；就算刷新页面或重新打开浏览器，也能接着看到进度。</div>
         {% if is_admin %}
           <div class="jobs-control-actions">
             <form class="jobs-config-form" action="{{ url_for('jobs_config_route') }}" method="post">
@@ -931,7 +931,7 @@
               <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
               <input type="hidden" name="tab" value="{{ selected_tab }}">
               <label class="jobs-inline-field">
-                <span>Max concurrency</span>
+                <span>同时处理数量</span>
                 <input type="number" name="max_concurrency" min="1" max="32" value="{{ initial_job_snapshot.max_concurrency }}">
               </label>
               <button type="submit" class="secondary">保存</button>
@@ -943,56 +943,56 @@
               <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
               <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
               <input type="hidden" name="tab" value="{{ selected_tab }}">
-              <button class="danger" type="submit" onclick="return confirm('确定要中断所有后台任务吗？');">全部停止</button>
+              <button class="danger" type="submit" onclick="return confirm('确定要停止所有正在处理和排队中的任务吗？');">全部停止</button>
             </form>
           </div>
         {% else %}
-          <div class="tool-hint">并发数和全局任务开关由管理员维护。</div>
+          <div class="tool-hint">一次同时处理多少任务，由管理员统一设置。</div>
         {% endif %}
       </div>
       <div class="job-summary-strip">
         <div class="job-summary-card">
-          <span>当前执行中</span>
+          <span>正在处理</span>
           <strong id="job-running-count">{{ initial_job_snapshot.running_count }}/{{ initial_job_snapshot.max_concurrency }}</strong>
         </div>
         <div class="job-summary-card">
-          <span>排队中任务</span>
+          <span>等待处理</span>
           <strong id="job-queued-count">{{ initial_job_snapshot.queued_count }}</strong>
         </div>
         <div class="job-summary-card">
-          <span>平均每任务耗时</span>
+          <span>平均耗时</span>
           <strong id="job-average-duration">{% if initial_job_snapshot.average_duration_seconds is not none %}{{ '%.1f 秒'|format(initial_job_snapshot.average_duration_seconds) }}{% else %}暂无{% endif %}</strong>
         </div>
         <div class="job-summary-card">
-          <span>最大并发</span>
+          <span>同时处理上限</span>
           <strong id="job-max-concurrency">{{ initial_job_snapshot.max_concurrency }}</strong>
         </div>
       </div>
     </div>
     <div id="job-dashboard" class="job-dashboard" data-selected-paper="{{ selected_paper.rel_path if selected_paper else '' }}">
-      <div class="job-dashboard-empty">当前没有后台任务。</div>
+      <div class="job-dashboard-empty">现在没有正在处理的内容。</div>
     </div>
   </details>
 
   <details class="tool-panel">
-    <summary>Prompt 管理</summary>
+    <summary>分析模板</summary>
     <div
       class="lazy-panel-slot"
       data-lazy-panel
       data-panel-url="{{ url_for('tool_panel_route', panel_name='prompt-manager', folder=current_folder, q=query, sort=sort_by, paper=selected_paper.rel_path if selected_paper else None, tab=selected_tab, show_done='1' if show_done else None) }}"
     >
-      <p class="lazy-panel-hint">展开时再加载 Prompt 管理器，减少首页首屏负担。</p>
+      <p class="lazy-panel-hint">点开后再加载，页面会更轻快。</p>
     </div>
   </details>
 
   <details class="tool-panel">
-    <summary>Team 管理</summary>
+    <summary>账号管理</summary>
     <div
       class="lazy-panel-slot"
       data-lazy-panel
       data-panel-url="{{ url_for('tool_panel_route', panel_name='team-admin', folder=current_folder, q=query, sort=sort_by, paper=selected_paper.rel_path if selected_paper else None, tab=selected_tab, show_done='1' if show_done else None) }}"
     >
-      <p class="lazy-panel-hint">管理员可在这里创建团队成员账号并管理角色。</p>
+      <p class="lazy-panel-hint">管理员可以在这里添加账号、调整角色和重置密码。</p>
     </div>
   </details>
 
@@ -1003,18 +1003,18 @@
       data-lazy-panel
       data-panel-url="{{ url_for('tool_panel_route', panel_name='offline-package', folder=current_folder, q=query, sort=sort_by, paper=selected_paper.rel_path if selected_paper else None, tab=selected_tab, show_done='1' if show_done else None) }}"
     >
-      <p class="lazy-panel-hint">展开时再加载离线导出列表，避免首页一次性渲染大量复选框。</p>
+      <p class="lazy-panel-hint">点开后再加载，打开首页会更快。</p>
     </div>
   </details>
 
   <details class="tool-panel">
-    <summary>历史论文批量补跑</summary>
+    <summary>批量生成分析</summary>
     <div
       class="lazy-panel-slot"
       data-lazy-panel
       data-panel-url="{{ url_for('tool_panel_route', panel_name='batch-run', folder=current_folder, q=query, sort=sort_by, paper=selected_paper.rel_path if selected_paper else None, tab=selected_tab, show_done='1' if show_done else None, batch_show_done='1' if batch_show_done else None, batch_page=batch_page) }}"
     >
-      <p class="lazy-panel-hint">展开时再加载批量补跑面板，减少首屏 HTML 体积。</p>
+      <p class="lazy-panel-hint">点开后再加载，首页不会一下子塞太多内容。</p>
     </div>
   </details>
 </section>
@@ -1372,14 +1372,14 @@
 
       function statusLabel(status) {
         return {
-          queued: "排队中",
-          running: "处理中",
-          saved: "已上传",
-          duplicate: "重复跳过",
-          error: "失败",
+          queued: "等待处理",
+          running: "正在处理",
+          saved: "已收好",
+          duplicate: "已跳过重复",
+          error: "出了点问题",
           completed: "已完成",
-          pending: "思考中",
-          failed: "失败",
+          pending: "回复中",
+          failed: "回复失败",
           skipped: "已跳过",
           stopped: "已停止",
         }[status] || status;
@@ -1711,7 +1711,7 @@
           maxConcurrencyNode.textContent = String(snapshot.max_concurrency);
         }
         if (!jobs.length) {
-          dashboard.innerHTML = '<div class="job-dashboard-empty">当前没有后台任务。</div>';
+          dashboard.innerHTML = '<div class="job-dashboard-empty">现在没有正在处理的内容。</div>';
           return;
         }
 
@@ -1792,7 +1792,7 @@
             <div class="job-card-top">
               <div>
                 <strong>${escapeHtml(item.name)}</strong>
-                <span>${escapeHtml(item.message || "等待上传")}</span>
+                <span>${escapeHtml(item.message || "等你开始上传")}</span>
               </div>
               <span class="job-status">${escapeHtml(statusLabel(item.status))}</span>
             </div>
@@ -1823,7 +1823,7 @@
 
         if (uploadSummaryText) {
           uploadSummaryText.textContent = completed === items.length
-            ? "本轮上传已结束"
+            ? "这轮上传已经结束"
             : `正在上传 ${completed}/${items.length} 个文件`;
         }
         if (uploadOverallPercent) uploadOverallPercent.textContent = `${percent}%`;
@@ -1850,7 +1850,7 @@
         const submitButton = document.getElementById("upload-submit");
         const files = Array.from(fileInput.files || []);
         if (!files.length) {
-          window.alert("请选择至少一个文件。");
+          window.alert("先选至少一个文件，再开始上传。");
           return;
         }
 
@@ -1865,7 +1865,7 @@
             progress: 0,
             loaded: 0,
             status: "queued",
-            message: "等待上传",
+            message: "等你开始上传",
           });
         });
         updateUploadView(uploadItems);
@@ -1913,9 +1913,9 @@
                 resolve(payload);
                 return;
               }
-              reject(new Error(payload.message || "上传失败"));
+              reject(new Error(payload.message || "上传没成功，请再试一次"));
             });
-            request.addEventListener("error", () => reject(new Error("网络错误，上传失败")));
+            request.addEventListener("error", () => reject(new Error("网络出了点问题，上传没有完成")));
             request.send(formData);
           });
 
@@ -1944,7 +1944,7 @@
               item.loaded = item.size;
               item.progress = 100;
               item.status = "error";
-              item.message = error.message || "上传失败";
+              item.message = error.message || "上传没成功，请再试一次";
               updateUploadView(uploadItems);
             }
           }
@@ -1989,7 +1989,7 @@
           event.preventDefault();
           sendChatMessage(form).catch((error) => {
             console.error("Chat send failed", error);
-            window.alert(error.message || "发送失败，请稍后再试。");
+            window.alert(error.message || "这条消息还没发出去，请稍后再试。");
           });
         });
       });
@@ -2000,7 +2000,7 @@
         if (details && details.dataset.panelLoading === "1") return;
 
         if (details) details.dataset.panelLoading = "1";
-        slot.innerHTML = '<p class="lazy-panel-loading">正在加载…</p>';
+        slot.innerHTML = '<p class="lazy-panel-loading">正在打开…</p>';
         try {
           const response = await fetch(panelUrl, { cache: "no-store" });
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -2009,7 +2009,7 @@
           if (details) details.dataset.panelLoaded = "1";
         } catch (error) {
           console.error("Failed to load tool panel", error);
-          slot.innerHTML = '<p class="lazy-panel-error">加载失败，请稍后重试。</p>';
+          slot.innerHTML = '<p class="lazy-panel-error">这里暂时没打开成功，请稍后重试。</p>';
         } finally {
           if (details) details.dataset.panelLoading = "0";
         }
@@ -2061,8 +2061,8 @@
           if (selectAllToggle) selectAllToggle.classList.remove("active");
           if (scopeHint) {
             scopeHint.textContent = action === "all"
-              ? "当前将提交本页已勾选的论文。若要跨分页提交，请点击“全选全部”。"
-              : "当前没有勾选任何本页论文；也可以一键选中全部匹配结果。";
+              ? "这次会处理本页勾选的论文；如果想跨分页全选，可以点“全选全部”。"
+              : "这次还没选中任何论文；也可以一键选中全部匹配结果。";
           }
         }
       });
@@ -2077,8 +2077,8 @@
         if (toggle) toggle.classList.toggle("active", checkbox.checked);
         if (scopeHint) {
           scopeHint.textContent = checkbox.checked
-            ? "已切换为：提交全部匹配结果，不受当前页限制。"
-            : "当前将只提交手动勾选的论文。";
+            ? "已经切换成：处理全部匹配结果，不受当前页限制。"
+            : "现在只会处理你手动勾选的论文。";
         }
       });
 
@@ -2093,7 +2093,7 @@
         if (selectAllCheckbox) selectAllCheckbox.checked = false;
         if (selectAllToggle) selectAllToggle.classList.remove("active");
         if (scopeHint) {
-          scopeHint.textContent = "当前将只提交手动勾选的论文。若要跨分页全选，请点击“全选全部”。";
+          scopeHint.textContent = "现在只会处理你手动勾选的论文；如果想跨分页全选，可以点“全选全部”。";
         }
       });
 

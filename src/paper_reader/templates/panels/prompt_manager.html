@@ -2,8 +2,8 @@
   {% if not can_manage_prompts %}
     <div class="library-box">
       <span class="meta-label">权限</span>
-      <strong>核心 Prompt 仅管理员可编辑。</strong>
-      <p>你仍然可以在论文页面直接运行共享 Prompt 并复用团队已有结果。</p>
+      <strong>这些分析模板由管理员统一维护。</strong>
+      <p>你可以直接使用现成模板；已经生成过的结果也会自动复用。</p>
     </div>
   {% endif %}
   <div class="prompt-manager-grid">
@@ -15,8 +15,8 @@
             <span>{{ prompt.slug }}</span>
           </div>
           <div class="prompt-card-meta">
-            {% if prompt.enabled %}<span>已启用</span>{% else %}<span>已停用</span>{% endif %}
-            {% if prompt.auto_run %}<span>自动应用</span>{% endif %}
+            {% if prompt.enabled %}<span>正在使用</span>{% else %}<span>已隐藏</span>{% endif %}
+            {% if prompt.auto_run %}<span>新论文自动生成</span>{% endif %}
           </div>
         </summary>
         <form class="prompt-form" action="{{ url_for('prompt_save_route') }}" method="post">
@@ -29,7 +29,7 @@
           <input type="hidden" name="tab" value="{{ selected_tab }}">
           <input type="hidden" name="existing_slug" value="{{ prompt.slug }}">
           <label>
-            <span>Tab 名称</span>
+            <span>显示名称</span>
             <input type="text" name="name" value="{{ prompt.name }}">
           </label>
           <label>
@@ -38,22 +38,22 @@
           </label>
           {% if can_manage_prompts %}
             <label>
-              <span>模型</span>
+              <span>使用模型</span>
               <input type="text" name="model" value="{{ prompt.model }}">
             </label>
           {% else %}
-            <p class="tool-hint">模型与系统参数由管理员统一维护。</p>
+            <p class="tool-hint">模型和其他系统参数由管理员统一设置。</p>
           {% endif %}
           <div class="checkbox-pair">
-            <label class="checkbox-line"><input type="checkbox" name="enabled" {% if prompt.enabled %}checked{% endif %}> 启用这个 Prompt</label>
-            <label class="checkbox-line"><input type="checkbox" name="auto_run" {% if prompt.auto_run %}checked{% endif %}> 新论文自动应用</label>
+            <label class="checkbox-line"><input type="checkbox" name="enabled" {% if prompt.enabled %}checked{% endif %}> 在论文页面里显示这份解读</label>
+            <label class="checkbox-line"><input type="checkbox" name="auto_run" {% if prompt.auto_run %}checked{% endif %}> 新论文自动生成这份解读</label>
           </div>
           <label>
-            <span>Prompt</span>
+            <span>生成说明</span>
             <textarea name="user_prompt" rows="10">{{ prompt.user_prompt }}</textarea>
           </label>
           <div class="tool-actions split-actions">
-            <button type="submit">保存 Prompt</button>
+            <button type="submit">保存模板</button>
           </div>
           </fieldset>
         </form>
@@ -65,21 +65,21 @@
           <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
           <input type="hidden" name="tab" value="{{ selected_tab }}">
           <input type="hidden" name="prompt_slug" value="{{ prompt.slug }}">
-          <button class="danger" type="submit" onclick="return confirm('确定要删除这个 Prompt 吗？已生成的 Markdown 结果文件不会自动删除。');" {% if not can_manage_prompts %}disabled{% endif %}>删除 Prompt</button>
+          <button class="danger" type="submit" onclick="return confirm('确定要删除这份分析模板吗？已经生成的结果不会自动删除。');" {% if not can_manage_prompts %}disabled{% endif %}>删除模板</button>
         </form>
       </details>
     {% else %}
       <div class="library-box">
-        <span class="meta-label">Prompt 状态</span>
-        <strong>当前还没有 Prompt。</strong>
+        <span class="meta-label">分析模板</span>
+        <strong>现在还没有可用模板。</strong>
       </div>
     {% endfor %}
 
     <section class="prompt-card new-prompt-card">
       <div class="prompt-card-head">
         <div>
-          <strong>新建 Prompt</strong>
-          <span>新建后会出现在论文阅读 tab 中</span>
+          <strong>新建分析模板</strong>
+          <span>创建后会出现在论文页面里</span>
         </div>
       </div>
       <form class="prompt-form" action="{{ url_for('prompt_save_route') }}" method="post">
@@ -91,32 +91,32 @@
         <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
         <input type="hidden" name="tab" value="{{ selected_tab }}">
         <label>
-          <span>Tab 名称</span>
+          <span>显示名称</span>
           <input type="text" name="name" value="{{ new_prompt_defaults.name }}" placeholder="例如：方法拆解 / 实验摘要 / 复现建议">
         </label>
         <label>
           <span>内部标识</span>
-          <input type="text" name="slug" value="{{ new_prompt_defaults.slug }}" placeholder="可留空；系统会自动生成，例如：method-breakdown">
+          <input type="text" name="slug" value="{{ new_prompt_defaults.slug }}" placeholder="可以留空；系统会自动生成">
         </label>
         {% if can_manage_prompts %}
           <label>
-            <span>模型</span>
+            <span>使用模型</span>
             <input type="text" name="model" value="{{ new_prompt_defaults.model }}">
           </label>
         {% else %}
-          <p class="tool-hint">模型与系统参数由管理员统一维护。</p>
+          <p class="tool-hint">模型和其他系统参数由管理员统一设置。</p>
         {% endif %}
         <div class="checkbox-pair">
-          <label class="checkbox-line"><input type="checkbox" name="enabled" {% if new_prompt_defaults.enabled %}checked{% endif %}> 启用这个 Prompt</label>
-          <label class="checkbox-line"><input type="checkbox" name="auto_run" {% if new_prompt_defaults.auto_run %}checked{% endif %}> 新论文自动应用</label>
+          <label class="checkbox-line"><input type="checkbox" name="enabled" {% if new_prompt_defaults.enabled %}checked{% endif %}> 在论文页面里显示这份解读</label>
+          <label class="checkbox-line"><input type="checkbox" name="auto_run" {% if new_prompt_defaults.auto_run %}checked{% endif %}> 新论文自动生成这份解读</label>
         </div>
-        <div class="tool-hint">如果你只填中文的 Tab 名称，也可以直接创建；系统会自动分配可用的内部标识。可用变量：`{document_path}`、`{document_name}`、`{document_dir}`。</div>
+        <div class="tool-hint">只填中文名称也可以，系统会自动补一个可用的内部标识。可用变量：`{document_path}`、`{document_name}`、`{document_dir}`。</div>
         <label>
-          <span>Prompt</span>
+          <span>生成说明</span>
           <textarea name="user_prompt" rows="10">{{ new_prompt_defaults.user_prompt }}</textarea>
         </label>
         <div class="tool-actions">
-          <button type="submit">创建 Prompt</button>
+          <button type="submit">创建模板</button>
         </div>
         </fieldset>
       </form>

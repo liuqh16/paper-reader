@@ -360,7 +360,7 @@ class PaperReaderAppTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("管理员权限", response.get_data(as_text=True))
+        self.assertIn("只有管理员能处理", response.get_data(as_text=True))
         self.assertIsNone(self.app.prompt_store.get_prompt("method-breakdown"))
 
     def test_member_upload_uses_managed_inbox_and_cannot_rename_files(self) -> None:
@@ -418,7 +418,7 @@ class PaperReaderAppTests(unittest.TestCase):
         html = rename_response.get_data(as_text=True)
 
         self.assertEqual(rename_response.status_code, 200)
-        self.assertIn("管理员权限", html)
+        self.assertIn("只有管理员能处理", html)
         self.assertTrue((self.library / "TeamInbox" / "alice" / "single.pdf").exists())
         self.assertFalse((self.library / "TeamInbox" / "alice" / "renamed.pdf").exists())
 
@@ -550,8 +550,8 @@ class PaperReaderAppTests(unittest.TestCase):
         admin_html = self.client.get("/?paper=paper.pdf&tab=source").get_data(as_text=True)
         self.assertIn("团队共享回答", admin_html)
         self.assertIn("私人回答", admin_html)
-        self.assertIn("Shared Chat", admin_html)
-        self.assertIn("Private Chat", admin_html)
+        self.assertIn("共享聊天", admin_html)
+        self.assertIn("私人聊天", admin_html)
 
         alice_html = alice_client.get("/?paper=paper.pdf&tab=source").get_data(as_text=True)
         self.assertIn("团队共享回答", alice_html)
@@ -880,7 +880,7 @@ class PaperReaderAppTests(unittest.TestCase):
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("这个 Prompt 还没有应用到当前论文上", html)
+        self.assertIn("这份解读还没生成，所以这里暂时还是空的。", html)
         self.assertIn("实验摘要", html)
 
     def test_index_renders_compact_workspace_controls(self) -> None:
@@ -1083,6 +1083,8 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn('data-check-action="none" data-check-group="paper"', html)
         self.assertIn('data-batch-select-all', html)
         self.assertIn("全选全部匹配结果", html)
+        self.assertIn("选择分析模板", html)
+        self.assertIn("批量生成所选结果", html)
 
     def test_batch_section_can_optionally_include_done_papers(self) -> None:
         self.make_pdf(self.library / "todo.pdf", "Todo Paper")
@@ -1533,7 +1535,7 @@ class PaperReaderAppTests(unittest.TestCase):
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("打开 Sources 页面", html)
+        self.assertIn("查看来源归档", html)
         self.assertIn("/sources", html)
 
     def test_sources_page_lists_archived_day_and_paper(self) -> None:
@@ -1543,11 +1545,12 @@ class PaperReaderAppTests(unittest.TestCase):
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
+        self.assertIn("每日论文来源", html)
         self.assertIn("2026-04-11", html)
         self.assertIn("SkillClaw", html)
         self.assertIn("2604.08377", html)
-        self.assertIn("打包下载选中项", html)
-        self.assertIn("导入到论文阅读器", html)
+        self.assertIn("打包下载选中论文", html)
+        self.assertIn("导入到阅读器", html)
 
     def test_sources_download_zip_packages_selected_papers(self) -> None:
         self.create_source_day("2026-04-11", paper_id="2604.08377", title="SkillClaw")

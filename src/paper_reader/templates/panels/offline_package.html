@@ -13,12 +13,12 @@
           <div class="batch-head">
             <div>
               <strong>导出范围</strong>
-              <span>只会导出当前筛选条件下未标记 DONE 的论文</span>
+              <span>只会导出当前筛选条件下还没放进 DONE 的论文</span>
             </div>
           </div>
           <div class="library-box">
             <span class="meta-label">打包内容</span>
-            <strong>PDF / Word 原文件 + 已生成的 Markdown + 一个可离线浏览的 HTML 阅读器</strong>
+            <strong>原文件 + 已生成的分析结果 + 一个可离线打开的阅读页</strong>
           </div>
         </section>
 
@@ -26,7 +26,7 @@
           <div class="batch-head">
             <div>
               <strong>选择论文</strong>
-              <span>下载后可直接离线阅读原文和各 Prompt 分析结果</span>
+              <span>下载后可以直接离线看原文和已经生成的解读</span>
             </div>
             <div class="batch-head-actions">
               <button type="button" class="ghost mini-action" data-check-action="all" data-check-group="offline-paper">全选</button>
@@ -39,7 +39,7 @@
                 <input type="checkbox" name="rel_paths" value="{{ paper.rel_path }}" data-batch-checkbox="offline-paper" {% if selected_paper and paper.rel_path == selected_paper.rel_path %}checked{% endif %}>
                 <div>
                   <strong>{{ paper.display_title }}</strong>
-                  <span>{{ paper.file_name }}{% if paper.extracted_date %} · {{ paper.extracted_date }}{% endif %} · {{ paper.prompt_result_count }}/{{ active_prompt_count }} Prompt</span>
+                  <span>{{ paper.file_name }}{% if paper.extracted_date %} · {{ paper.extracted_date }}{% endif %} · {{ paper.prompt_result_count }}/{{ active_prompt_count }} 份解读</span>
                 </div>
               </label>
             {% endfor %}
@@ -47,12 +47,12 @@
         </section>
       </div>
 
-      <div class="tool-hint">下载的是一个完整 zip 包；解压后直接打开其中的 `index.html`，就能在本地继续浏览这些论文和对应的 MD 分析。</div>
+      <div class="tool-hint">下载后解压这个 zip，直接打开里面的 `index.html`，就能在本地继续阅读这些论文和对应分析。</div>
       <div class="tool-actions">
         <button type="submit">下载离线阅读包 (.zip)</button>
       </div>
     </form>
   {% else %}
-    <p class="empty-inline">当前没有符合筛选条件的未完成论文，无法生成离线阅读包。</p>
+    <p class="empty-inline">当前筛选结果里没有可导出的论文。</p>
   {% endif %}
 </div>

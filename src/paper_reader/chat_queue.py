@@ -100,9 +100,9 @@ class PaperChatQueue:
         except Exception as exc:
             error_text = str(exc)
             if "429" in error_text or "Too Many Requests" in error_text:
-                body = "Paper Bot 当前有点忙，刚刚触发了速率限制。请稍等十几秒后重试这条问题。"
+                body = "Paper Bot 现在有点忙，刚刚碰到了速率限制。请等十几秒，再把这条问题发一次。"
             else:
-                body = f"本次回答失败：{error_text}"
+                body = f"这次回复没成功：{error_text}"
             self.team_store.update_chat_message(
                 job.assistant_message_id,
                 body=body,

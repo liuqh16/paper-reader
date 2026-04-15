@@ -1235,7 +1235,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     def require_admin_user() -> TeamUser | None:
         user = current_user()
         if user is None or user.role != "admin":
-            flash("这个操作需要管理员权限。", "error")
+            flash("这个操作只有管理员能处理。", "error")
             return None
         return user
 
@@ -1431,13 +1431,13 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                     requested_by_display_name=actor.display_name if actor else None,
                 )
 
-        message = f"上传成功：{destination.name}"
+        message = f"上传完成：{destination.name}"
         if submission["queued"]:
-            message += f"；已提交 {submission['queued']} 个后台 Prompt 任务"
+            message += f"；系统已经开始处理 {submission['queued']} 项分析"
         elif submission["existing"]:
-            message += "；相关 Prompt 任务已在队列中"
+            message += "；相关分析已经在处理中"
         elif submission["skipped"]:
-            message += "；Prompt 结果已存在，未重复提交"
+            message += "；已有结果，这次没有重复生成"
 
         return {
             "status": "saved",
@@ -1457,13 +1457,13 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
 
     def flash_submission_summary(result: dict[str, Any], *, action_label: str) -> None:
         if result["queued"]:
-            flash(f"{action_label}：已提交 {result['queued']} 个后台任务。", "success")
+            flash(f"{action_label}，系统已经开始处理 {result['queued']} 项分析。", "success")
         if result["existing"]:
-            flash(f"{result['existing']} 个任务已在队列中，未重复提交。", "success")
+            flash(f"其中有 {result['existing']} 项分析已经在处理中，所以没有重复提交。", "success")
         if result["skipped"]:
-            flash(f"{result['skipped']} 个结果已存在，未重复提交。", "success")
+            flash(f"其中有 {result['skipped']} 项结果已经存在，所以没有重复生成。", "success")
         if result["invalid"]:
-            flash(f"{result['invalid']} 个任务因 Prompt 缺失而未提交。", "error")
+            flash(f"有 {result['invalid']} 项分析没找到对应模板，所以这次没有开始。", "error")
 
     def selected_source_papers(day_record: Any, selected_ids: list[str]) -> list[Any]:
         paper_map = day_paper_map(day_record)
@@ -1491,7 +1491,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                     preferred_name=preferred_name,
                 )
             except (FileNotFoundError, ValueError) as exc:
-                error_messages.append(f"{paper.paper_id or paper.title} 导入失败：{exc}")
+                error_messages.append(f"{paper.paper_id or paper.title} 导入没成功：{exc}")
                 continue
 
             if result["status"] == "saved" and result["saved_rel_path"]:
@@ -1972,7 +1972,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         sort_by = request.form.get("sort", "date_desc")
         show_done = parse_checkbox(request.form.get("show_done"))
         if not files or not any(file.filename for file in files):
-            flash("请选择至少一个文件。", "error")
+            flash("先选至少一个文件，再开始上传。", "error")
             return redirect_to_index(current_folder or target_folder, query, sort_by, show_done=show_done)
 
         saved_rel_paths: list[str] = []
@@ -2006,7 +2006,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 flash(result["message"], "error")
 
         if saved:
-            flash(f"本次成功上传 {saved} 个文件。", "success")
+            flash(f"这次成功上传了 {saved} 个文件。", "success")
             auto_prompts = app.prompt_store.auto_prompts()  # type: ignore[attr-defined]
             if auto_prompts:
                 actor = current_user()
@@ -2018,11 +2018,11 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                     requested_by_user_id=actor.id if actor else None,
                     requested_by_display_name=actor.display_name if actor else None,
                 )
-                flash_submission_summary(submission, action_label="自动 Prompt 处理已转为后台任务")
+                flash_submission_summary(submission, action_label="上传完成后，后续分析也已经排上")
         if duplicate_count:
-            flash(f"检测到 {duplicate_count} 个重复文件，已自动跳过。", "success")
+            flash(f"检测到 {duplicate_count} 个重复文件，已经自动跳过。", "success")
         if error_count and not saved:
-            flash(f"有 {error_count} 个文件上传失败。", "error")
+            flash(f"有 {error_count} 个文件没有上传成功。", "error")
         selected_rel_path = saved_rel_paths[0] if saved_rel_paths else None
         return redirect_to_index(current_folder or target_folder, query, sort_by, selected_rel_path, "source", show_done=show_done)
 
@@ -2039,7 +2039,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         show_done = parse_checkbox(request.form.get("show_done"))
 
         if file is None or not file.filename:
-            return {"status": "error", "message": "没有选择文件。"}, 400
+            return {"status": "error", "message": "先选一个文件再上传。"}, 400
 
         try:
             result = process_uploaded_file(
@@ -2054,7 +2054,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         except ValueError as exc:
             return {"status": "error", "message": str(exc)}, 400
         except Exception as exc:
-            return {"status": "error", "message": f"上传失败：{exc}"}, 500
+            return {"status": "error", "message": f"上传没成功：{exc}"}, 500
 
         status_code = 200 if result["status"] in {"saved", "duplicate"} else 400
         return result, status_code
@@ -2075,7 +2075,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         target = "/".join(part for part in [parent_folder, folder_name] if part)
         try:
             app.library.create_folder(target)  # type: ignore[attr-defined]
-            flash(f"已创建文件夹：{target}", "success")
+            flash(f"已经新建文件夹：{target}", "success")
         except ValueError as exc:
             flash(str(exc), "error")
         return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
@@ -2097,7 +2097,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             active_prompt_slugs = [prompt.slug for prompt in app.prompt_store.active_prompts()]  # type: ignore[attr-defined]
             moved_paper = app.library.build_record_for_rel_path(new_rel_path, active_prompt_slugs)  # type: ignore[attr-defined]
             app.team_store.rename_paper(rel_path, moved_paper)  # type: ignore[attr-defined]
-            flash("文件已重命名。", "success")
+            flash("文件名已经改好了。", "success")
             return redirect_to_index(current_folder, query, sort_by, new_rel_path, tab, show_done=show_done)
         except (FileNotFoundError, ValueError) as exc:
             flash(str(exc), "error")
@@ -2116,9 +2116,9 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         try:
             app.library.delete_file(rel_path)  # type: ignore[attr-defined]
             app.team_store.delete_paper(rel_path)  # type: ignore[attr-defined]
-            flash("文件已删除。", "success")
+            flash("这篇论文已经删除。", "success")
         except FileNotFoundError:
-            flash("文件不存在。", "error")
+            flash("这篇论文已经找不到了。", "error")
         return redirect_to_index(current_folder, query, sort_by, show_done=show_done)
 
     @app.post("/done-toggle")
@@ -2135,7 +2135,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             moved_paper = app.library.build_record_for_rel_path(new_rel_path, active_prompt_slugs)  # type: ignore[attr-defined]
             app.team_store.rename_paper(rel_path, moved_paper)  # type: ignore[attr-defined]
             moved_to_done = app.library.is_done_rel_path(new_rel_path)  # type: ignore[attr-defined]
-            flash("论文已标记为 DONE。" if moved_to_done else "论文已恢复到未完成列表。", "success")
+            flash("这篇论文已经放进 DONE。" if moved_to_done else "这篇论文已经移回待处理列表。", "success")
             selected_rel_path = new_rel_path if show_done else None
             next_show_done = show_done
             next_folder = current_folder
@@ -2168,7 +2168,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         force = parse_checkbox(request.form.get("force"))
         prompt = app.prompt_store.get_prompt(prompt_slug)  # type: ignore[attr-defined]
         if prompt is None:
-            flash("Prompt 不存在。", "error")
+            flash("这份分析模板不存在。", "error")
             return redirect_to_index(current_folder, query, sort_by, rel_path or None, "source", show_done=show_done)
         actor = current_user()
         submission = app.job_queue.submit(  # type: ignore[attr-defined]
@@ -2179,7 +2179,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             requested_by_user_id=actor.id if actor else None,
             requested_by_display_name=actor.display_name if actor else None,
         )
-        flash_submission_summary(submission, action_label=f"《{prompt.name}》后台任务已提交")
+        flash_submission_summary(submission, action_label=f"《{prompt.name}》这份解读已经加入处理队列")
         return redirect_to_index(current_folder, query, sort_by, rel_path or None, prompt_slug, show_done=show_done)
 
     @app.post("/prompt-save")
@@ -2206,7 +2206,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 admin_only=True,
                 created_by_user_id=admin_user.id,
             )
-            flash(f"Prompt《{prompt.name}》已保存。", "success")
+            flash(f"分析模板《{prompt.name}》已经保存。", "success")
             app.library.invalidate_scan_cache()  # type: ignore[attr-defined]
             if tab != "source" and tab == prompt.slug and not prompt.enabled:
                 tab = "source"
@@ -2228,12 +2228,12 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
         try:
             removed = app.prompt_store.delete_prompt(prompt_slug)  # type: ignore[attr-defined]
-            flash(f"Prompt《{removed.name}》已删除。", "success")
+            flash(f"分析模板《{removed.name}》已经删除。", "success")
             app.library.invalidate_scan_cache()  # type: ignore[attr-defined]
             if tab == prompt_slug:
                 tab = "source"
         except FileNotFoundError:
-            flash("Prompt 不存在。", "error")
+            flash("这份分析模板不存在。", "error")
         return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
 
     @app.post("/team/users/save")
@@ -2254,7 +2254,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 request.form.get("password", ""),
                 request.form.get("role", "member") or "member",
             )
-            flash(f"成员 {user.display_name} 已创建。", "success")
+            flash(f"账号 {user.display_name} 已经创建。", "success")
         except ValueError as exc:
             flash(str(exc), "error")
         return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
@@ -2280,7 +2280,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 password=request.form.get("new_password", ""),
                 acting_user_id=admin_user.id,
             )
-            flash(f"成员 {updated_user.display_name} 已更新。", "success")
+            flash(f"账号 {updated_user.display_name} 已经更新。", "success")
         except (FileNotFoundError, ValueError) as exc:
             flash(str(exc), "error")
         return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
@@ -2415,7 +2415,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                     "assistant_message_id": assistant_message_id,
                     "context": serialize_chat_context(app.team_store.chat_context(rel_path, actor.id)),  # type: ignore[attr-defined]
                 }
-            flash("消息已发送给 Paper Bot。", "success")
+            flash("消息已经发出，Paper Bot 正在回复。", "success")
         except (FileNotFoundError, ValueError) as exc:
             if wants_json:
                 return {"error": str(exc)}, 400
@@ -2481,13 +2481,13 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         try:
             result = import_remote_paper(target, recommendation_reason)
             if result["status"] == "existing":
-                flash("论文已存在，已直接复用并记录推荐。", "success")
+                flash("这篇论文已经在库里了，推荐理由也一并记下了。", "success")
             else:
-                flash("论文导入成功。", "success")
-                flash_submission_summary(result.get("submission", {}), action_label="导入后的自动 Prompt 已转为后台任务")
+                flash("论文已经导入。", "success")
+                flash_submission_summary(result.get("submission", {}), action_label="导入完成后，后续分析也已经排上")
             return redirect_to_index(current_folder, query, sort_by, result["rel_path"], "source", show_done=show_done)
         except Exception as exc:
-            flash(f"导入失败：{exc}", "error")
+            flash(f"导入没成功：{exc}", "error")
             return redirect_to_index(current_folder, query, sort_by, show_done=show_done)
 
     @app.post("/prompt-batch-run")
@@ -2519,7 +2519,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             ]
 
         if not rel_paths:
-            flash("请至少选择一篇论文。", "error")
+            flash("先选至少一篇论文。", "error")
             return redirect(
                 url_for(
                     "index",
@@ -2534,7 +2534,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 )
             )
         if not prompt_slugs:
-            flash("请至少选择一个 Prompt。", "error")
+            flash("先选至少一份分析模板。", "error")
             return redirect(
                 url_for(
                     "index",
@@ -2558,7 +2558,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             requested_by_user_id=actor.id if actor else None,
             requested_by_display_name=actor.display_name if actor else None,
         )
-        flash_submission_summary(submission, action_label="批量后台任务已提交")
+        flash_submission_summary(submission, action_label="批量生成已经开始")
         return redirect(
             url_for(
                 "index",
@@ -2584,7 +2584,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         rel_paths = list(dict.fromkeys(path.strip("/") for path in request.form.getlist("rel_paths") if path.strip("/")))
 
         if not rel_paths:
-            flash("请至少选择一篇论文来生成离线阅读包。", "error")
+            flash("先选至少一篇论文，再生成离线阅读包。", "error")
             return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
 
         scan = app.library.scan()  # type: ignore[attr-defined]
@@ -2663,7 +2663,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         run_date = request.form.get("run_date", "").strip()
         day_record = load_source_day(Path(app.config["SOURCE_ARCHIVE_ROOT"]), run_date)
         if day_record is None:
-            flash("没有找到对应日期的 Source 数据。", "error")
+            flash("没有找到这一天的来源归档。", "error")
             return redirect(url_for("sources_index"))
 
         selected_papers = selected_source_papers(day_record, request.form.getlist("paper_ids"))
@@ -2701,23 +2701,23 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         run_date = request.form.get("run_date", "").strip()
         day_record = load_source_day(Path(app.config["SOURCE_ARCHIVE_ROOT"]), run_date)
         if day_record is None:
-            flash("没有找到对应日期的 Source 数据。", "error")
+            flash("没有找到这一天的来源归档。", "error")
             return redirect(url_for("sources_index"))
 
         selected = selected_source_papers(day_record, request.form.getlist("paper_ids"))
         if not selected:
-            flash("请至少选择一篇论文。", "error")
+            flash("先选至少一篇论文。", "error")
             return redirect(url_for("sources_index"))
 
         summary = import_source_day_papers(day_record, selected)
         if summary["saved_rel_paths"]:
             flash(
-                f"已导入 {len(summary['saved_rel_paths'])} 篇论文到 `{summary['target_folder']}`。",
+                f"已经把 {len(summary['saved_rel_paths'])} 篇论文导入到 `{summary['target_folder']}`。",
                 "success",
             )
-            flash_submission_summary(summary["submission"], action_label="自动 Prompt 处理已转为后台任务")
+            flash_submission_summary(summary["submission"], action_label="导入完成后，后续分析也已经排上")
         if summary["duplicate_count"]:
-            flash(f"有 {summary['duplicate_count']} 篇论文已存在于阅读器中，已跳过。", "success")
+            flash(f"有 {summary['duplicate_count']} 篇论文已经在库里了，所以这次跳过。", "success")
         for message in summary["error_messages"]:
             flash(message, "error")
         return redirect(url_for("sources_index"))
@@ -2741,7 +2741,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 auto_run=True,
             )
         submission = app.job_queue.submit([rel_path], [prompt.slug], force=True, source="legacy-ai-summary")  # type: ignore[attr-defined]
-        flash_submission_summary(submission, action_label="AI 摘要后台任务已提交")
+        flash_submission_summary(submission, action_label="这份核心解读已经开始生成")
         return redirect_to_index(current_folder, query, sort_by, rel_path or None, DEFAULT_PROMPT_SLUG, show_done=show_done)
 
     @app.get("/jobs/status")
@@ -2764,11 +2764,11 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         try:
             value = app.settings_store.save_max_concurrency(int(requested))  # type: ignore[attr-defined]
         except (TypeError, ValueError):
-            flash("Max concurrency 必须是 1 到 32 之间的整数。", "error")
+            flash("同时处理数量要填 1 到 32 之间的整数。", "error")
             return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
 
         app.job_queue.update_max_concurrency(value)  # type: ignore[attr-defined]
-        flash(f"Max concurrency 已更新为 {value}。", "success")
+        flash(f"同时处理数量已经更新为 {value}。", "success")
         return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
 
     @app.post("/jobs/stop-all")
@@ -2785,9 +2785,9 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         summary = app.job_queue.stop_all()  # type: ignore[attr-defined]
         interrupted = summary["queued"] + summary["running"]
         if interrupted:
-            flash(f"已请求停止 {interrupted} 个后台任务（运行中 {summary['running']}，排队中 {summary['queued']}）。", "success")
+            flash(f"已经请求停止 {interrupted} 个任务（正在处理 {summary['running']}，等待处理 {summary['queued']}）。", "success")
         else:
-            flash("当前没有可停止的后台任务。", "success")
+            flash("现在没有可停止的任务。", "success")
         return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
 
     @app.get("/files/<path:rel_path>")
@@ -2816,7 +2816,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         active_records = app.library.rebuild_active_index(lightweight=True)  # type: ignore[attr-defined]
         done_records = app.library.rebuild_done_index(lightweight=True)  # type: ignore[attr-defined]
         flash(
-            f"已完成文件夹快速扫描：普通目录已更新（{len(active_records)} 篇），DONE 轻量索引已刷新（{len(done_records)} 篇），未触发 Prompt，也未执行重型解析。",
+            f"论文列表已经快速同步：普通目录 {len(active_records)} 篇，DONE {len(done_records)} 篇；这次没有重新跑分析。",
             "success",
         )
         return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
