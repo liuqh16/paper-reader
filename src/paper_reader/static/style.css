@@ -233,6 +233,7 @@ main {
 
 .paper-tree-scroll {
   min-height: 0;
+  flex: 1 1 auto;
   margin-top: 8px;
   overflow-y: auto;
   overflow-x: hidden;
@@ -372,8 +373,8 @@ main {
 .empty-inline { margin: 10px 0 0; }
 
 .viewer-pane {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   height: 100%;
   overflow: hidden;
@@ -417,6 +418,12 @@ main {
   padding-bottom: 2px;
   scrollbar-width: thin;
 }
+.viewer-tabs-inline {
+  margin: 2px 0 0;
+  padding-bottom: 0;
+  justify-content: flex-end;
+  flex: 0 1 48%;
+}
 .viewer-tab {
   display: inline-flex;
   flex-direction: column;
@@ -458,6 +465,10 @@ main {
   border-radius: 12px;
   background: rgba(255,255,255,0.82);
   overflow: hidden;
+}
+.source-viewer > .main-viewer,
+.source-viewer > .source-viewer-body {
+  min-height: 0;
 }
 .source-text-viewer {
   overflow: auto;
@@ -682,6 +693,11 @@ main {
   font-size: var(--font-meta);
   line-height: 1.45;
 }
+.team-tag-chip small {
+  font-size: var(--font-micro);
+  line-height: 1.25;
+  color: rgba(84, 60, 35, 0.68);
+}
 .team-chip-list,
 .team-note-list,
 .team-comment-list {
@@ -812,7 +828,8 @@ main {
 .team-chat-thread {
   display: grid;
   gap: 10px;
-  max-height: 320px;
+  min-height: 0;
+  flex: 1 1 auto;
   overflow-y: auto;
   padding-right: 4px;
 }
@@ -1571,9 +1588,11 @@ button:disabled,
   border-radius: 20px;
 }
 .pane-left {
-  display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: 10px;
+  gap: 10px;
 }
 .pane-right {
   display: flex;
@@ -1583,8 +1602,9 @@ button:disabled,
   overflow-y: auto;
 }
 .pane-center {
-  display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: 10px;
 }
 .pane-top,
@@ -1610,6 +1630,22 @@ button:disabled,
 .ghost-toggle {
   white-space: nowrap;
 }
+.sidebar-panel-stack {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+.sidebar-panel-stack > [data-sidebar-panel] {
+  min-height: 0;
+  height: 100%;
+}
+.sidebar-library-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.sidebar-switch-row {
+  padding: 0 4px;
+}
 .sidebar-index-head {
   display: flex;
   align-items: baseline;
@@ -1627,7 +1663,7 @@ button:disabled,
 .sidebar-recommendation-panel {
   display: grid;
   gap: 10px;
-  margin: 0 4px 10px;
+  margin: 0 4px;
   overflow: hidden;
 }
 .sidebar-recommendation-feed {
@@ -1657,11 +1693,20 @@ button:disabled,
   border-bottom: 1px solid rgba(84, 60, 35, 0.1);
 }
 .viewer-toolbar-slim {
-  align-items: center;
-  gap: 10px;
+  align-items: flex-start;
+  gap: 12px;
+}
+.viewer-toolbar-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 .viewer-toolbar-copy {
   min-width: 0;
+  flex: 1 1 auto;
 }
 .viewer-toolbar-copy h2 {
   display: -webkit-box;
@@ -1674,6 +1719,7 @@ button:disabled,
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+  flex: 0 0 auto;
 }
 .viewer-status-pill {
   display: inline-flex;
@@ -1731,14 +1777,18 @@ button:disabled,
   font-size: var(--font-meta);
 }
 .add-tag-chip {
-  min-width: 28px;
-  padding: 4px 8px;
+  min-width: 0;
+  padding: 4px 10px;
   font-weight: 700;
 }
 .viewer-inline-tags-panel {
   display: grid;
   gap: 8px;
   padding: 0 8px 6px;
+}
+.viewer-inline-tags-label {
+  color: var(--muted);
+  font-size: var(--font-micro);
 }
 .viewer-tag-editor {
   padding: 0 8px 6px;
@@ -1775,6 +1825,7 @@ button:disabled,
 }
 .reader-stage {
   min-height: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1835,6 +1886,10 @@ button:disabled,
 }
 .team-chat-card[data-chat-panel] {
   scroll-margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
 }
 .assistant-inline-note {
   display: grid;
@@ -1856,6 +1911,9 @@ button:disabled,
 .assistant-card .team-inline-form {
   margin-top: 10px;
 }
+.team-chat-card .team-inline-form {
+  margin-top: 12px;
+}
 .assistant-card .team-inline-form.compact-form {
   grid-template-columns: minmax(0, 1fr) auto;
 }
@@ -1864,6 +1922,9 @@ button:disabled,
 }
 .team-inline-form textarea {
   min-height: 88px;
+}
+.team-chat-card textarea {
+  min-height: 112px;
 }
 .pane-resizer {
   position: relative;
@@ -2360,6 +2421,10 @@ body.settings-open .settings-drawer {
     gap: 4px;
     font-size: 0.64rem;
   }
+  .viewer-toolbar-main {
+    flex-direction: column;
+    gap: 10px;
+  }
   .viewer-tabs {
     flex-wrap: nowrap;
     overflow-x: auto;
@@ -2367,6 +2432,12 @@ body.settings-open .settings-drawer {
     margin: 0 -2px 6px;
     padding: 0 2px 4px;
     scrollbar-width: thin;
+  }
+  .viewer-tabs-inline {
+    width: 100%;
+    max-width: 100%;
+    justify-content: flex-start;
+    margin: 0 -2px 0;
   }
   .viewer-tab {
     flex: 0 0 auto;

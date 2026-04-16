@@ -15,6 +15,7 @@ from pypdf import PdfWriter
 
 from src.paper_reader.app import create_app, load_env_file_values
 from src.paper_reader.markdown_render import render_markdown
+from src.paper_reader.team_store import generate_auto_tags
 
 
 DOCX_CONTENT_TYPES = """<?xml version='1.0' encoding='UTF-8'?>
@@ -421,6 +422,27 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn("只有管理员能处理", html)
         self.assertTrue((self.library / "TeamInbox" / "alice" / "single.pdf").exists())
         self.assertFalse((self.library / "TeamInbox" / "alice" / "renamed.pdf").exists())
+
+    def test_generate_auto_tags_prefers_specialized_ai_terms(self) -> None:
+        tags = generate_auto_tags(
+            title="DeepSeek LoRA for Finance Coding via On-Policy Distillation",
+            preview_text=(
+                "Researchers from Tsinghua University and NVIDIA study diffusion-style training, "
+                "on-policy distillation, and coding benchmarks for financial reasoning."
+            ),
+            folder="research/agents",
+            extension="pdf",
+        )
+
+        self.assertIn("lora", tags)
+        self.assertIn("on-policy distillation", tags)
+        self.assertIn("finance", tags)
+        self.assertIn("coding", tags)
+        self.assertTrue(any(tag in tags for tag in ["deepseek", "thu", "nvidia"]))
+        self.assertNotIn("distillation", tags)
+        self.assertNotIn("models", tags)
+        self.assertNotIn("training", tags)
+        self.assertNotIn("pdf", tags)
 
     def test_team_metadata_is_visible_and_searchable(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Robot Policy")
@@ -983,10 +1005,13 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn('aria-hidden="true"', html)
         self.assertIn('aria-label="折叠阅读区"', html)
         self.assertIn("settings-user-card", html)
-        self.assertIn('data-collapsible-toggle="tags-inline"', html)
         self.assertIn('data-collapsible-body="tags-inline"', html)
+        self.assertIn('data-collapsible-toggle="tag-editor"', html)
         self.assertIn("data-chat-form", html)
-        self.assertIn("推荐列表与论文索引", html)
+        self.assertIn("推荐列表 / 找论文", html)
+        self.assertIn('data-sidebar-switch="recommendations"', html)
+        self.assertIn('data-sidebar-switch="library"', html)
+        self.assertIn('data-sidebar-panel="library"', html)
         self.assertIn("右边只显示一个聊天区域；点“我爱学”或“一起学”时，会直接切换到对应那一块。", html)
         self.assertIn('data-chat-switch="private"', html)
         self.assertIn('data-chat-panel="private"', html)
@@ -995,6 +1020,7 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn("加入推荐列表", html)
         self.assertIn("发到一起学", html)
         self.assertIn("compact-tag-toggle", html)
+        self.assertIn("添标签", html)
         self.assertIn("原文阅读", html)
         self.assertNotIn("<strong>讨论</strong>", html)
         self.assertNotIn("把想法记在这里，后面的人能接着看", html)
@@ -1005,6 +1031,14 @@ class PaperReaderAppTests(unittest.TestCase):
         css = (Path(self.app.static_folder) / "style.css").read_text(encoding="utf-8")
 
         self.assertIn("touch-action: none;", css)
+        self.assertIn(
+            ".viewer-pane {\n  display: flex;\n  flex-direction: column;",
+            css,
+        )
+        self.assertIn(
+            ".pane-center {\n  display: flex;\n  flex-direction: column;",
+            css,
+        )
         self.assertIn(
             ".workspace-shell.center-collapsed .viewer-head-flat,\n.workspace-shell.center-collapsed .viewer-inline-tags-panel,\n.workspace-shell.center-collapsed .viewer-tag-editor,\n.workspace-shell.center-collapsed .viewer-tabs,\n.workspace-shell.center-collapsed [data-center-stage] {\n  display: none;",
             css,
@@ -1023,6 +1057,7 @@ class PaperReaderAppTests(unittest.TestCase):
 
         self.assertIn('pane.toggleAttribute("inert", collapsed);', template)
         self.assertIn('pane.setAttribute("aria-hidden", collapsed ? "true" : "false");', template)
+        self.assertIn("initializeSidebarPanelSwitch();", template)
         self.assertIn('settingsDrawer.toggleAttribute("inert", !layoutState.settingsOpen);', template)
         self.assertIn('settingsDrawer.setAttribute("aria-hidden", layoutState.settingsOpen ? "false" : "true");', template)
 

@@ -16,36 +16,107 @@ _AUTO_TAG_STOPWORDS = {
     "a",
     "an",
     "and",
+    "application",
+    "applications",
+    "approach",
+    "approaches",
     "are",
     "as",
     "at",
+    "based",
     "be",
     "by",
+    "check",
+    "data",
+    "dataset",
+    "datasets",
+    "distillation",
     "for",
+    "foundation",
+    "framework",
+    "frameworks",
     "from",
+    "general",
     "in",
     "into",
     "is",
+    "language",
+    "large",
+    "learning",
+    "method",
+    "methods",
+    "model",
+    "models",
+    "new",
+    "network",
+    "networks",
     "of",
     "on",
     "or",
+    "paper",
+    "pdf",
+    "reader",
+    "research",
+    "results",
+    "study",
+    "system",
+    "systems",
+    "task",
+    "tasks",
+    "teams",
+    "that",
     "the",
-    "to",
-    "with",
+    "training",
+    "ui",
     "using",
     "via",
-    "based",
-    "towards",
-    "paper",
-    "study",
-    "toward",
-    "new",
-    "toward",
-    "from",
-    "that",
+    "with",
 }
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
-_ARXIV_ID_RE = re.compile(r"\b\d{4}\.\d{4,5}(?:v\d+)?\b")
+_TITLE_TOKEN_RE = re.compile(r"\b[A-Z][A-Za-z0-9-]{2,}\b")
+_LOW_PRIORITY_AUTO_TAGS = {"agent", "distillation", "reasoning"}
+_SPECIALIZED_AUTO_TAG_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("lora", (r"\blora\b", r"low[ -]?rank adaptation")),
+    ("qlora", (r"\bqlora\b",)),
+    ("diffusion", (r"\bdiffusion\b", r"\bdiffusion model")),
+    ("rectified flow", (r"rectified flow",)),
+    ("flow matching", (r"flow matching",)),
+    ("on-policy distillation", (r"on[- ]policy distillation", r"onpolicy distillation")),
+    ("distillation", (r"\bdistill(?:ation|ed)?\b",)),
+    ("dpo", (r"\bdpo\b", r"direct preference optimization")),
+    ("grpo", (r"\bgrpo\b", r"group relative policy optimization")),
+    ("ppo", (r"\bppo\b", r"proximal policy optimization")),
+    ("rlhf", (r"\brlhf\b", r"reinforcement learning from human feedback")),
+    ("sft", (r"\bsft\b", r"supervised fine[- ]tuning")),
+    ("rag", (r"\brag\b", r"retrieval[- ]augmented generation")),
+    ("moe", (r"\bmoe\b", r"mixture of experts")),
+    ("long-context", (r"long[- ]context", r"long context")),
+    ("reasoning", (r"\breasoning\b",)),
+    ("agent", (r"\bagent(?:ic|s)?\b",)),
+    ("multimodal", (r"\bmultimodal\b", r"vision[- ]language", r"vision language")),
+    ("vision", (r"\bvision\b", r"computer vision", r"image generation", r"image understanding")),
+    ("video", (r"\bvideo\b",)),
+    ("audio", (r"\baudio\b",)),
+    ("speech", (r"\bspeech\b",)),
+    ("robotics", (r"\brobotics?\b",)),
+    ("coding", (r"\bcoding\b", r"\bcode\b", r"program synthesis", r"software engineering")),
+    ("math", (r"\bmath(?:ematical)?\b", r"\bgeometry\b", r"\balgebra\b", r"\btheorem\b")),
+    ("finance", (r"\bfinanc(?:e|ial)\b", r"\btrading\b", r"\bquant\b")),
+    ("healthcare", (r"\bmedical\b", r"\bclinical\b", r"\bhealthcare\b", r"\bpatient\b")),
+    ("biology", (r"\bbiology\b", r"\bbiomedical\b", r"\bprotein\b", r"\bgene\b")),
+    ("deepseek", (r"\bdeepseek\b",)),
+    ("thu", (r"\btsinghua\b", r"\bthu\b")),
+    ("nvidia", (r"\bnvidia\b",)),
+    ("openai", (r"\bopenai\b",)),
+    ("anthropic", (r"\banthropic\b",)),
+    ("deepmind", (r"\bdeepmind\b",)),
+    ("google", (r"\bgoogle\b",)),
+    ("meta", (r"\bmeta\b",)),
+    ("microsoft", (r"\bmicrosoft\b",)),
+    ("alibaba", (r"\balibaba\b",)),
+    ("bytedance", (r"\bbytedance\b",)),
+    ("moonshot", (r"\bmoonshot\b",)),
+)
 
 
 @dataclass(slots=True)
@@ -1372,12 +1443,6 @@ class TeamStore:
     def _ensure_auto_tags_locked(self, conn: sqlite3.Connection, paper_id: int | None, paper: Any) -> None:
         if paper_id is None:
             return
-        existing_auto = conn.execute(
-            "SELECT COUNT(*) FROM paper_tags WHERE paper_id = ? AND source_type = 'auto'",
-            (paper_id,),
-        ).fetchone()
-        if existing_auto is not None and int(existing_auto[0]) > 0:
-            return
         suggestions = generate_auto_tags(
             title=str(getattr(paper, "display_title", "") or getattr(paper, "title", "")),
             preview_text=str(getattr(paper, "preview_text", "") or ""),
@@ -1385,6 +1450,7 @@ class TeamStore:
             extension=str(getattr(paper, "extension", "") or ""),
         )
         now = self._timestamp()
+        desired_tag_ids: list[int] = []
         for name in suggestions:
             slug = slugify_text(name)
             if not slug:
@@ -1401,13 +1467,22 @@ class TeamStore:
                 tag_id = int(created_tag_id)
             else:
                 tag_id = int(row["id"])
+            desired_tag_ids.append(tag_id)
             conn.execute(
                 """
-                INSERT OR IGNORE INTO paper_tags(paper_id, tag_id, source_type, score, added_by_user_id, created_at, is_locked)
+                INSERT OR REPLACE INTO paper_tags(paper_id, tag_id, source_type, score, added_by_user_id, created_at, is_locked)
                 VALUES (?, ?, 'auto', 1.0, NULL, ?, 1)
                 """,
                 (paper_id, tag_id, now),
             )
+        if desired_tag_ids:
+            placeholders = ", ".join("?" for _ in desired_tag_ids)
+            conn.execute(
+                f"DELETE FROM paper_tags WHERE paper_id = ? AND source_type = 'auto' AND tag_id NOT IN ({placeholders})",
+                (paper_id, *desired_tag_ids),
+            )
+        else:
+            conn.execute("DELETE FROM paper_tags WHERE paper_id = ? AND source_type = 'auto'", (paper_id,))
 
 
 def flatten_comments(comments: Iterable[TeamComment]) -> Iterable[TeamComment]:
@@ -1422,39 +1497,96 @@ def slugify_text(value: str) -> str:
     return lowered.strip("-")[:80]
 
 
-def generate_auto_tags(*, title: str, preview_text: str, folder: str, extension: str) -> list[str]:
-    text = " ".join(part for part in [title, preview_text[:5000], folder, extension] if part)
-    candidates: list[str] = []
-
-    for match in _ARXIV_ID_RE.findall(text):
-        candidates.append(match)
-
-    acronyms = re.findall(r"\b[A-Z]{2,8}\b", title)
-    candidates.extend(acronyms[:2])
-
-    words = [token.lower() for token in _TOKEN_RE.findall(text)]
-    seen_counts: dict[str, int] = {}
-    for word in words:
-        if word in _AUTO_TAG_STOPWORDS or word.isdigit():
-            continue
-        seen_counts[word] = seen_counts.get(word, 0) + 1
-
-    ranked = sorted(seen_counts.items(), key=lambda item: (-item[1], item[0]))
-    candidates.extend(word for word, _ in ranked[:6])
-
-    pretty: list[str] = []
-    seen: set[str] = set()
-    for item in candidates:
-        cleaned = item.strip()
-        if not cleaned:
-            continue
+def _extend_unique(items: list[str], *candidates: str) -> None:
+    seen = {slugify_text(item) for item in items}
+    for candidate in candidates:
+        cleaned = candidate.strip()
         normalized = slugify_text(cleaned)
         if not normalized or normalized in seen:
             continue
+        items.append(cleaned)
         seen.add(normalized)
-        if cleaned.islower() and len(cleaned) <= 18:
-            cleaned = cleaned.replace("-", " ")
-        pretty.append(cleaned)
-        if len(pretty) >= 6:
+
+
+def _match_specialized_auto_tags(title: str, text: str) -> list[str]:
+    title_matches: list[str] = []
+    body_matches: list[str] = []
+    low_priority_matches: list[str] = []
+    for tag_name, patterns in _SPECIALIZED_AUTO_TAG_PATTERNS:
+        matched_in_title = any(re.search(pattern, title, flags=re.IGNORECASE) for pattern in patterns)
+        matched_in_text = matched_in_title or any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in patterns)
+        if not matched_in_text:
+            continue
+        if tag_name in _LOW_PRIORITY_AUTO_TAGS:
+            low_priority_matches.append(tag_name)
+        elif matched_in_title:
+            title_matches.append(tag_name)
+        else:
+            body_matches.append(tag_name)
+    all_matches = [*title_matches, *body_matches, *low_priority_matches]
+    if "on-policy distillation" in all_matches:
+        title_matches = [tag for tag in title_matches if tag != "distillation"]
+        body_matches = [tag for tag in body_matches if tag != "distillation"]
+        low_priority_matches = [tag for tag in low_priority_matches if tag != "distillation"]
+    return [*title_matches, *body_matches, *low_priority_matches]
+
+
+def _fallback_title_tags(title: str, preview_text: str, folder: str, blocked: set[str], blocked_phrases: set[str]) -> list[str]:
+    text = " ".join(part for part in [title, preview_text[:6000], folder] if part)
+    title_tokens = [token.lower() for token in _TITLE_TOKEN_RE.findall(title)]
+    words = [token.lower() for token in _TOKEN_RE.findall(text)]
+    seen_counts: dict[str, int] = {}
+    for word in words:
+        normalized = slugify_text(word)
+        if (
+            not normalized
+            or normalized in _AUTO_TAG_STOPWORDS
+            or normalized in blocked
+            or any(normalized in phrase for phrase in blocked_phrases)
+            or len(normalized) < 4
+        ):
+            continue
+        seen_counts[normalized] = seen_counts.get(normalized, 0) + 1
+
+    ranked = sorted(
+        seen_counts.items(),
+        key=lambda item: (
+            0 if item[0] in title_tokens else 1,
+            -item[1],
+            -len(item[0]),
+            item[0],
+        ),
+    )
+    return [word.replace("-", " ") for word, _ in ranked[:3]]
+
+
+def generate_auto_tags(*, title: str, preview_text: str, folder: str, extension: str) -> list[str]:
+    del extension
+    text = " ".join(part for part in [title, preview_text[:8000], folder] if part)
+    candidates: list[str] = []
+
+    specialized_candidates = _match_specialized_auto_tags(title, text)
+    _extend_unique(candidates, *specialized_candidates)
+    blocked_fallback_tokens: set[str] = set()
+    blocked_specialized_phrases: set[str] = set()
+    for item in specialized_candidates:
+        normalized = slugify_text(item)
+        if not normalized:
+            continue
+        blocked_specialized_phrases.add(normalized)
+        blocked_fallback_tokens.add(normalized)
+        blocked_fallback_tokens.update(part for part in normalized.split("-") if len(part) >= 4)
+    _extend_unique(
+        candidates,
+        *_fallback_title_tags(title, preview_text, folder, blocked_fallback_tokens, blocked_specialized_phrases),
+    )
+
+    filtered: list[str] = []
+    for item in candidates:
+        normalized = slugify_text(item)
+        if not normalized or normalized in _AUTO_TAG_STOPWORDS:
+            continue
+        filtered.append(item)
+        if len(filtered) >= 6:
             break
-    return pretty
+    return filtered
