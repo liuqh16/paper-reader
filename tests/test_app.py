@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import io
 import json
 import os
@@ -13,9 +14,12 @@ from unittest.mock import ANY, patch
 
 from pypdf import PdfWriter
 
-from src.paper_reader.app import create_app, load_env_file_values
+from src.paper_reader.app import create_app, load_env_file_values, normalize_import_target
 from src.paper_reader.markdown_render import render_markdown
+from src.paper_reader.prompt_manager import DEFAULT_PROMPT_SLUG
 from src.paper_reader.team_store import generate_auto_tags
+
+paper_reader_app_module = importlib.import_module("src.paper_reader.app")
 
 
 DOCX_CONTENT_TYPES = """<?xml version='1.0' encoding='UTF-8'?>
@@ -422,6 +426,12 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn("只有管理员能处理", html)
         self.assertTrue((self.library / "TeamInbox" / "alice" / "single.pdf").exists())
         self.assertFalse((self.library / "TeamInbox" / "alice" / "renamed.pdf").exists())
+
+    def test_normalize_import_target_accepts_common_arxiv_shortcuts(self) -> None:
+        self.assertEqual(normalize_import_target("arxiv:2501.12948"), "2501.12948")
+        self.assertEqual(normalize_import_target("arxiv 2501.12948v2"), "2501.12948v2")
+        self.assertEqual(normalize_import_target("arxiv.org/abs/2501.12948"), "https://arxiv.org/abs/2501.12948")
+        self.assertEqual(normalize_import_target("abs/2501.12948"), "https://arxiv.org/abs/2501.12948")
 
     def test_generate_auto_tags_prefers_specialized_ai_terms(self) -> None:
         tags = generate_auto_tags(
@@ -878,6 +888,42 @@ class PaperReaderAppTests(unittest.TestCase):
             requested_by_display_name="admin",
         )
 
+    def test_import_link_route_accepts_arxiv_shortcuts(self) -> None:
+        pdf_path = self.source_root / "fixture.pdf"
+        self.make_pdf(pdf_path, "Imported from arXiv")
+        pdf_bytes = pdf_path.read_bytes()
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return pdf_bytes
+
+        with patch.object(paper_reader_app_module, "urlopen", return_value=FakeResponse()):
+            with patch.object(self.app.job_queue, "submit", return_value={"queued": 1, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}):
+                response = self.client.post(
+                    "/import-link",
+                    data={
+                        "folder": "",
+                        "q": "",
+                        "sort": "date_desc",
+                        "show_done": "",
+                        "import_target": "arxiv:2501.12948",
+                        "recommendation_reason": "",
+                    },
+                    follow_redirects=True,
+                )
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("论文已经导入", html)
+        self.assertTrue((self.library / "Imports" / "arXiv" / "2501.12948.pdf").exists())
+        self.assertEqual(self.app.team_store.find_paper_by_source("arxiv", "2501.12948"), "Imports/arXiv/2501.12948.pdf")
+
     def test_prompt_save_route_creates_custom_prompt(self) -> None:
         response = self.client.post(
             "/prompt-save",
@@ -974,6 +1020,101 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn("方法拆解", names)
         self.assertIn("实验摘要", names)
         self.assertEqual(len(prompts), 3)
+
+    def test_prompt_manager_panel_shows_tag_prompt_controls(self) -> None:
+        response = self.client.get("/tool-panels/prompt-manager")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("标签生成 Prompt", html)
+        self.assertIn("保存标签 Prompt", html)
+        self.assertIn("核心解读完成后自动刷新 AI 标签", html)
+
+    def test_tag_prompt_save_route_updates_config(self) -> None:
+        response = self.client.post(
+            "/tag-prompt-save",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "paper": "",
+                "tab": "source",
+                "model": "gpt-5.4-mini",
+                "enabled": "on",
+                "user_prompt": "请直接阅读 `{document_path}`，只输出 JSON 标签数组。",
+            },
+            follow_redirects=True,
+        )
+        html = response.get_data(as_text=True)
+        tag_prompt = self.app.prompt_store.get_tag_prompt()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("标签生成 Prompt 已保存", html)
+        self.assertTrue(tag_prompt.enabled)
+        self.assertEqual(tag_prompt.model, "gpt-5.4-mini")
+        self.assertIn("JSON 标签数组", tag_prompt.user_prompt)
+
+    def test_tag_generate_ai_route_replaces_ai_tags(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Tag Prompt Paper")
+        visible_slugs = [prompt.slug for prompt in self.app.prompt_store.active_prompts()]
+        paper = self.app.library.build_record_for_rel_path("paper.pdf", visible_slugs)
+        self.app.team_store.sync_papers([paper])
+        self.app.team_store.replace_generated_tags("paper.pdf", ["legacy-tag"], source_type="ai")
+        self.app.prompt_store.save_tag_prompt(
+            user_prompt="请直接阅读 `{document_path}`，只输出 JSON 标签数组。",
+            model="gpt-5.4",
+            enabled=True,
+        )
+
+        with patch.object(paper_reader_app_module, "run_prompt_on_document", return_value='["lora", "finance", "coding"]'):
+            response = self.client.post(
+                "/tags/generate-ai",
+                data={
+                    "folder": "",
+                    "q": "",
+                    "sort": "date_desc",
+                    "show_done": "",
+                    "rel_path": "paper.pdf",
+                    "tab": "source",
+                },
+                follow_redirects=True,
+            )
+
+        html = response.get_data(as_text=True)
+        context = self.app.team_store.paper_context("paper.pdf")
+        ai_tags = [tag.name for tag in context["tags"] if tag.source_type == "ai"]
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("AI 标签已刷新", html)
+        self.assertEqual(ai_tags, ["coding", "finance", "lora"])
+        self.assertNotIn("legacy-tag", ai_tags)
+
+    def test_generate_prompt_result_refreshes_ai_tags_after_core_prompt(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Auto Tag Paper")
+        visible_slugs = [prompt.slug for prompt in self.app.prompt_store.active_prompts()]
+        paper = self.app.library.build_record_for_rel_path("paper.pdf", visible_slugs)
+        self.app.team_store.sync_papers([paper])
+        self.app.prompt_store.save_tag_prompt(
+            user_prompt="请直接阅读 `{document_path}`，只输出 JSON 标签数组。",
+            model="gpt-5.4",
+            enabled=True,
+        )
+        core_prompt = self.app.prompt_store.get_prompt(DEFAULT_PROMPT_SLUG)
+        assert core_prompt is not None
+
+        with patch.object(
+            paper_reader_app_module,
+            "run_prompt_on_document",
+            side_effect=["# 这是一份核心解读", '["robotics", "rag"]'],
+        ):
+            result_path, generated = self.app.library.generate_prompt_result("paper.pdf", core_prompt, force=True)
+
+        context = self.app.team_store.paper_context("paper.pdf")
+        ai_tags = [tag.name for tag in context["tags"] if tag.source_type == "ai"]
+
+        self.assertTrue(generated)
+        self.assertTrue(result_path.exists())
+        self.assertEqual(ai_tags, ["rag", "robotics"])
 
     def test_prompt_missing_tab_shows_empty_state(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Test Title")

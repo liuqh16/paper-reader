@@ -11,8 +11,9 @@ from urllib.request import urlopen
 from src.paper_reader.ai_summary import DEFAULT_MODEL, explain_document
 
 DEFAULT_URL = "https://arxiv.org/pdf/2501.12948"
-DEFAULT_DOCUMENT_PATH = Path("docs/papers/2501.12948.pdf")
-DEFAULT_OUTPUT_PATH = Path("docs/papers/2501.12948.explained.zh.md")
+DEFAULT_STORAGE_ROOT = Path("/vePFS-Mindverse/share/paper-reader")
+DEFAULT_DOCUMENT_PATH = DEFAULT_STORAGE_ROOT / "library" / "2501.12948.pdf"
+DEFAULT_OUTPUT_PATH = DEFAULT_STORAGE_ROOT / "library" / "2501.12948.explained.zh.md"
 
 
 def download_file(url: str, destination: Path, force: bool = False) -> Path:

@@ -30,7 +30,7 @@ from .prompt_manager import DEFAULT_PROMPT_SLUG, PromptDefinition, PromptStore, 
 from .settings import SettingsStore
 from .source_archive import day_paper_map, load_source_day, load_source_days, local_pdf_path_for
 from .task_queue import PaperJobQueue
-from .team_store import TeamStore, TeamUser, flatten_comments
+from .team_store import TeamStore, TeamUser, flatten_comments, slugify_text
 
 CACHE_FILE_NAME = ".paper_reader_index.json"
 DONE_INDEX_FILE_NAME = ".paper_reader_done_index.json"
@@ -41,6 +41,9 @@ DEFAULT_LOGIN_USERNAME = "admin"
 DEFAULT_LOGIN_PASSWORD = "paperpaperreaderreader12678"
 MAX_LOGIN_FAILURES = 3
 LOGIN_LOCK_SECONDS = 5 * 60
+DEFAULT_STORAGE_ROOT = Path("/vePFS-Mindverse/share/paper-reader")
+DEFAULT_LIBRARY_ROOT = DEFAULT_STORAGE_ROOT / "library"
+DEFAULT_SOURCE_ARCHIVE_ROOT = DEFAULT_STORAGE_ROOT / "sources" / "huggingface_daily"
 
 
 @dataclass
@@ -131,6 +134,91 @@ class LoginGuard:
     def register_success(self, key: str) -> None:
         with self._lock:
             self._attempts.pop(key, None)
+
+
+_TAG_OUTPUT_CODE_BLOCK_RE = re.compile(r"```(?:json|text)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+def _normalize_generated_tag(candidate: str) -> str:
+    cleaned = re.sub(r"^[-*#\d.\s]+", "", candidate).strip().strip("`\"'")
+    if " - " in cleaned:
+        cleaned = cleaned.split(" - ", 1)[0].strip()
+    if ": " in cleaned:
+        cleaned = cleaned.split(": ", 1)[0].strip()
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().lower()
+    return cleaned
+
+
+def parse_tag_generation_output(output: str) -> list[str]:
+    text = output.strip()
+    if not text:
+        return []
+
+    candidates: list[str] = []
+    payload_candidates = [text]
+    fenced = _TAG_OUTPUT_CODE_BLOCK_RE.findall(text)
+    payload_candidates.extend(block.strip() for block in fenced if block.strip())
+
+    for payload in payload_candidates:
+        try:
+            parsed = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            parsed = parsed.get("tags", [])
+        if isinstance(parsed, list):
+            for item in parsed:
+                if isinstance(item, str):
+                    candidates.append(item)
+                elif isinstance(item, dict) and isinstance(item.get("name"), str):
+                    candidates.append(item["name"])
+            break
+
+    if not candidates:
+        normalized_text = text.replace("\r", "\n")
+        for raw_line in normalized_text.split("\n"):
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.startswith("[") and line.endswith("]"):
+                line = line.strip("[]")
+            if "," in line:
+                parts = [part for part in line.split(",") if part.strip()]
+                if len(parts) > 1:
+                    candidates.extend(parts)
+                    continue
+            candidates.append(line)
+
+    tags: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = _normalize_generated_tag(candidate)
+        slug = slugify_text(normalized)
+        if not slug or slug in seen:
+            continue
+        tags.append(normalized)
+        seen.add(slug)
+        if len(tags) >= 8:
+            break
+    return tags
+
+
+def normalize_import_target(raw_target: str) -> str:
+    target = raw_target.strip()
+    if not target:
+        return ""
+
+    lowered = target.lower()
+    arxiv_prefix_match = re.fullmatch(r"arxiv[:\s]+(\d{4}\.\d{4,5}(?:v\d+)?)", lowered, flags=re.IGNORECASE)
+    if arxiv_prefix_match:
+        return arxiv_prefix_match.group(1)
+
+    if lowered.startswith("arxiv.org/") or lowered.startswith("www.arxiv.org/"):
+        return f"https://{target.lstrip('/')}"
+    if lowered.startswith("abs/") or lowered.startswith("pdf/"):
+        return f"https://arxiv.org/{target.lstrip('/')}"
+
+    return target
 
 
 class PaperLibrary:
@@ -838,6 +926,73 @@ class PaperLibrary:
             shared=True,
         )
 
+    def generate_ai_tags(
+        self,
+        rel_path: str,
+        *,
+        progress_callback: Callable[[int, str], None] | None = None,
+        should_abort: Callable[[], bool] | None = None,
+        process_callback: Callable[[Any], None] | None = None,
+        triggered_by_user_id: int | None = None,
+    ) -> list[str]:
+        if self.team_store is None:
+            return []
+        tag_prompt = self.prompt_store.get_tag_prompt()
+
+        document_path = self.resolve_relative_path(rel_path)
+        if not document_path.exists() or not document_path.is_file():
+            raise FileNotFoundError(rel_path)
+
+        content = run_prompt_on_document(
+            document_path,
+            user_prompt=tag_prompt.user_prompt,
+            model=tag_prompt.model or DEFAULT_MODEL,
+            progress_callback=progress_callback,
+            should_abort=should_abort,
+            process_callback=process_callback,
+        )
+        tags = parse_tag_generation_output(content)
+        if not tags:
+            raise ValueError("标签 Prompt 没有返回可用标签。")
+        self.team_store.replace_generated_tags(
+            rel_path,
+            tags,
+            source_type="ai",
+            user_id=triggered_by_user_id,
+            is_locked=True,
+        )
+        return tags
+
+    def _maybe_refresh_ai_tags(
+        self,
+        rel_path: str,
+        *,
+        prompt_slug: str,
+        progress_callback: Callable[[int, str], None] | None = None,
+        should_abort: Callable[[], bool] | None = None,
+        process_callback: Callable[[Any], None] | None = None,
+        triggered_by_user_id: int | None = None,
+    ) -> None:
+        if prompt_slug != DEFAULT_PROMPT_SLUG:
+            return
+        tag_prompt = self.prompt_store.get_tag_prompt()
+        if not tag_prompt.enabled:
+            return
+
+        def wrapped_progress(progress: int, message: str) -> None:
+            if progress_callback is None:
+                return
+            scaled = min(99, 90 + max(0, min(progress, 100)) // 10)
+            progress_callback(scaled, f"标签生成：{message}")
+
+        self.generate_ai_tags(
+            rel_path,
+            progress_callback=wrapped_progress,
+            should_abort=should_abort,
+            process_callback=process_callback,
+            triggered_by_user_id=triggered_by_user_id,
+        )
+
     def generate_prompt_result(
         self,
         rel_path: str,
@@ -868,6 +1023,18 @@ class PaperLibrary:
         )
         result_path = self.write_prompt_result(rel_path, prompt, content)
         self._record_prompt_run(rel_path, prompt, result_path, triggered_by_user_id=triggered_by_user_id)
+        try:
+            self._maybe_refresh_ai_tags(
+                rel_path,
+                prompt_slug=prompt.slug,
+                progress_callback=progress_callback,
+                should_abort=should_abort,
+                process_callback=process_callback,
+                triggered_by_user_id=triggered_by_user_id,
+            )
+        except Exception:
+            # Tag generation is optional; keep the main interpretation result even if tag refresh fails.
+            pass
         return result_path, True
 
     def run_prompt_batch(
@@ -1180,8 +1347,10 @@ def redirect_to_index(
 
 def create_app(library_root: Path | None = None, source_archive_root: Path | None = None) -> Flask:
     base_dir = Path(__file__).resolve().parents[2]
-    root = library_root or Path(base_dir / "docs" / "papers")
-    source_root = source_archive_root or Path(base_dir / "paper-reader-source" / "data" / "huggingface_daily")
+    root = (library_root or DEFAULT_LIBRARY_ROOT).resolve()
+    source_root = (source_archive_root or DEFAULT_SOURCE_ARCHIVE_ROOT).resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    source_root.mkdir(parents=True, exist_ok=True)
     login_username, login_password = resolve_login_credentials(base_dir)
     app = Flask(
         __name__,
@@ -1532,7 +1701,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         }
 
     def resolve_import_target(raw_target: str) -> dict[str, str]:
-        target = raw_target.strip()
+        target = normalize_import_target(raw_target)
         if not target:
             raise ValueError("请填写 arXiv ID、论文链接或 PDF 链接。")
 
@@ -1947,6 +2116,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 **context,
                 all_prompts=state["all_prompts"],
                 can_manage_prompts=is_admin_user(),
+                tag_prompt=app.prompt_store.get_tag_prompt(),  # type: ignore[attr-defined]
                 new_prompt_defaults={
                     "name": "",
                     "slug": "",
@@ -2238,6 +2408,54 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         except ValueError as exc:
             flash(str(exc), "error")
         return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
+
+    @app.post("/tag-prompt-save")
+    def tag_prompt_save_route() -> Any:
+        current_folder = request.form.get("folder", "")
+        query = request.form.get("q", "")
+        sort_by = request.form.get("sort", "date_desc")
+        show_done = parse_checkbox(request.form.get("show_done"))
+        selected_paper = request.form.get("paper", "") or None
+        tab = request.form.get("tab", "source")
+        admin_user = require_admin_user()
+        if admin_user is None:
+            return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
+        try:
+            tag_prompt = app.prompt_store.save_tag_prompt(  # type: ignore[attr-defined]
+                user_prompt=request.form.get("user_prompt", ""),
+                model=request.form.get("model", DEFAULT_MODEL),
+                enabled=parse_checkbox(request.form.get("enabled")),
+                updated_by_user_id=admin_user.id,
+            )
+            if tag_prompt.enabled:
+                flash("标签生成 Prompt 已保存；重新运行“核心解读”后会自动刷新 AI 标签。", "success")
+            else:
+                flash("标签生成 Prompt 已保存；当前处于关闭状态。", "success")
+        except ValueError as exc:
+            flash(str(exc), "error")
+        return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
+
+    @app.post("/tags/generate-ai")
+    def tag_generate_ai_route() -> Any:
+        current_folder = request.form.get("folder", "")
+        query = request.form.get("q", "")
+        sort_by = request.form.get("sort", "date_desc")
+        show_done = parse_checkbox(request.form.get("show_done"))
+        rel_path = request.form.get("rel_path", "").strip("/")
+        tab = request.form.get("tab", "source")
+        admin_user = require_admin_user()
+        if admin_user is None:
+            return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+        try:
+            ensure_paper_metadata(rel_path)
+            tags = app.library.generate_ai_tags(  # type: ignore[attr-defined]
+                rel_path,
+                triggered_by_user_id=admin_user.id,
+            )
+            flash(f"AI 标签已刷新：{', '.join(tags)}", "success")
+        except (FileNotFoundError, ValueError, RuntimeError) as exc:
+            flash(f"AI 标签生成失败：{exc}", "error")
+        return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
 
     @app.post("/prompt-delete")
     def prompt_delete_route() -> Any:

@@ -5,10 +5,10 @@
   <aside class="sidebar-pane card layout-pane pane-left" data-pane="left">
     <div class="pane-top pane-top-compact">
       <div>
-        <p class="eyebrow">左栏</p>
+        <p class="eyebrow">导航栏</p>
         <h2>推荐列表 / 找论文</h2>
       </div>
-      <button type="button" class="icon-button pane-toggle" data-pane-button="left" data-toggle-pane="left" title="折叠左栏" aria-label="折叠左栏">
+      <button type="button" class="icon-button pane-toggle" data-pane-button="left" data-toggle-pane="left" title="折叠导航栏" aria-label="折叠导航栏">
         <span class="icon-shell" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
@@ -16,11 +16,11 @@
             <path d="M15 8.5L11.5 12 15 15.5"></path>
           </svg>
         </span>
-        <span class="sr-only">切换左栏</span>
+        <span class="sr-only">切换导航栏</span>
       </button>
     </div>
 
-    <div class="assistant-switch-row compact-switch-row sidebar-switch-row" role="tablist" aria-label="左栏区域切换">
+    <div class="assistant-switch-row compact-switch-row sidebar-switch-row" role="tablist" aria-label="导航栏区域切换">
       <button type="button" class="assistant-switch-button" data-sidebar-switch="recommendations" aria-pressed="false">推荐列表</button>
       <button type="button" class="assistant-switch-button" data-sidebar-switch="library" aria-pressed="false">找论文</button>
     </div>
@@ -271,6 +271,17 @@
             {% elif not summary_tags %}
               <span class="viewer-tag-empty">还没有标签</span>
             {% endif %}
+            {% if is_admin %}
+              <form action="{{ url_for('tag_generate_ai_route') }}" method="post" class="inline-form">
+                <input type="hidden" name="folder" value="{{ current_folder }}">
+                <input type="hidden" name="q" value="{{ query }}">
+                <input type="hidden" name="sort" value="{{ sort_by }}">
+                <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+                <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+                <input type="hidden" name="tab" value="{{ selected_tab }}">
+                <button type="submit" class="ghost-button compact-tag-toggle">AI 刷新标签</button>
+              </form>
+            {% endif %}
             <button type="button" class="ghost-button compact-tag-toggle add-tag-chip" data-collapsible-toggle="tag-editor" aria-expanded="false">添标签</button>
           </div>
         </div>
@@ -283,7 +294,7 @@
             {% for tag in overflow_tags %}
               <div class="team-tag-chip source-{{ tag.source_type }}">
                 <span>#{{ tag.name }}</span>
-                <small>{{ 'AI' if tag.source_type == 'auto' else ('官方' if tag.source_type == 'official' else '手动') }}</small>
+                <small>{{ 'AI Prompt' if tag.source_type == 'ai' else ('AI' if tag.source_type == 'auto' else ('官方' if tag.source_type == 'official' else '手动')) }}</small>
                 {% if is_admin or (tag.source_type == 'manual' and current_user and current_user.display_name == tag.added_by_display_name) %}
                   <form action="{{ url_for('tag_remove_route') }}" method="post" class="inline-form">
                     <input type="hidden" name="folder" value="{{ current_folder }}">
@@ -549,7 +560,7 @@
       </div>
     {% endif %}
   </aside>
-  <button type="button" class="pane-restore-rail pane-restore-left" data-restore-pane="left" data-toggle-pane="left" title="展开左栏" aria-label="展开左栏">
+  <button type="button" class="pane-restore-rail pane-restore-left" data-restore-pane="left" data-toggle-pane="left" title="展开导航栏" aria-label="展开导航栏">
     <span class="pane-restore-glyph" aria-hidden="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
         <rect x="4" y="5" width="16" height="14" rx="3"></rect>
@@ -557,7 +568,7 @@
         <path d="M16 8.5L12.5 12 16 15.5"></path>
       </svg>
     </span>
-    <span class="sr-only">展开左栏</span>
+    <span class="sr-only">展开导航栏</span>
   </button>
   <button type="button" class="pane-restore-rail pane-restore-right" data-restore-pane="right" data-toggle-pane="right" title="展开右栏" aria-label="展开右栏">
     <span class="pane-restore-glyph" aria-hidden="true">
@@ -572,14 +583,14 @@
 </section>
 
 <div class="workspace-orbit-dock" role="toolbar" aria-label="工作区快捷操作">
-  <button type="button" class="icon-button workspace-dock-button" data-pane-button="left" data-toggle-pane="left" title="切换左栏" aria-label="切换左栏">
+  <button type="button" class="icon-button workspace-dock-button" data-pane-button="left" data-toggle-pane="left" title="切换导航栏" aria-label="切换导航栏">
     <span class="icon-shell" aria-hidden="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
         <path d="M9.5 5v14"></path>
       </svg>
     </span>
-    <span class="sr-only">切换左栏</span>
+    <span class="sr-only">切换导航栏</span>
   </button>
   <button type="button" class="icon-button workspace-dock-button" data-pane-button="center" data-toggle-pane="center" title="最小化或展开阅读区" aria-label="最小化或展开阅读区">
     <span class="icon-shell" aria-hidden="true">
@@ -668,14 +679,14 @@
     </div>
   {% endif %}
   <div class="drawer-quick-actions drawer-quick-actions-icons">
-    <button type="button" class="icon-button" data-pane-button="left" data-toggle-pane="left" title="切换左栏" aria-label="切换左栏">
+    <button type="button" class="icon-button" data-pane-button="left" data-toggle-pane="left" title="切换导航栏" aria-label="切换导航栏">
       <span class="icon-shell" aria-hidden="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
           <path d="M9.5 5v14"></path>
         </svg>
       </span>
-      <span>左栏</span>
+      <span>导航栏</span>
     </button>
     <button type="button" class="icon-button" data-pane-button="center" data-toggle-pane="center" title="切换中栏" aria-label="切换中栏">
       <span class="icon-shell" aria-hidden="true">
@@ -1137,7 +1148,7 @@
         paneStateButtons.forEach((button) => {
           const pane = button.dataset.paneButton || button.dataset.togglePane || "left";
           const collapsed = isPaneCollapsed(pane);
-          const noun = pane === "left" ? "左栏" : pane === "center" ? "阅读区" : "右栏";
+          const noun = pane === "left" ? "导航栏" : pane === "center" ? "阅读区" : "右栏";
           button.classList.toggle("is-collapsed", collapsed);
           button.setAttribute("aria-pressed", collapsed ? "false" : "true");
           button.setAttribute("title", `${collapsed ? "展开" : "折叠"}${noun}`);

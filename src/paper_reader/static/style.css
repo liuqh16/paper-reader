@@ -479,6 +479,7 @@ main {
 .text-viewer,
 .prompt-viewer {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 12px;
   min-height: 0;
   height: 100%;
@@ -486,7 +487,7 @@ main {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: rgba(255,255,255,0.82);
-  overflow: auto;
+  overflow: hidden;
 }
 .source-viewer-head,
 .text-viewer-intro,
@@ -748,6 +749,9 @@ main {
 }
 .team-tag-chip.source-auto {
   background: rgba(16, 185, 129, 0.08);
+}
+.team-tag-chip.source-ai {
+  background: rgba(245, 158, 11, 0.12);
 }
 .team-tag-chip.source-official {
   background: rgba(59, 130, 246, 0.08);
@@ -1845,7 +1849,8 @@ button:disabled,
   height: 100%;
 }
 .prompt-viewer-wide .markdown-viewer {
-  height: 100%;
+  min-height: 0;
+  height: auto;
   overflow: auto;
 }
 .assistant-inline-note,

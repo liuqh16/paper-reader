@@ -8,4 +8,4 @@ cd "${PROJECT_DIR}"
 export PYTHONPATH="${PROJECT_DIR}:${PYTHONPATH:-}"
 
 exec python3 -u -m paper_reader_source.service \
-  --data-dir "${PROJECT_DIR}/data/huggingface_daily"
+  --data-dir "/vePFS-Mindverse/share/paper-reader/sources/huggingface_daily"

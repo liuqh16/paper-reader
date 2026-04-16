@@ -892,6 +892,63 @@ class TeamStore:
                     (paper_id, tag_id, source_type, user_id, now, 1 if is_locked else 0),
                 )
 
+    def replace_generated_tags(
+        self,
+        rel_path: str,
+        names: list[str],
+        *,
+        source_type: str = "ai",
+        user_id: int | None = None,
+        is_locked: bool = True,
+    ) -> None:
+        cleaned_names = [name.strip() for name in names if name and name.strip()]
+        with self._write_lock:
+            with self._connect() as conn:
+                paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+                if paper_id is None:
+                    raise FileNotFoundError(rel_path)
+                now = self._timestamp()
+                desired_tag_ids: list[int] = []
+                for name in cleaned_names:
+                    slug = slugify_text(name)
+                    if not slug:
+                        continue
+                    row = conn.execute("SELECT id FROM tags WHERE slug = ?", (slug,)).fetchone()
+                    if row is None:
+                        cursor = conn.execute(
+                            """
+                            INSERT INTO tags(name, slug, created_by_user_id, created_at, updated_at)
+                            VALUES (?, ?, ?, ?, ?)
+                            """,
+                            (name, slug, user_id, now, now),
+                        )
+                        created_tag_id = cursor.lastrowid
+                        if created_tag_id is None:
+                            raise RuntimeError("Failed to persist generated tag.")
+                        tag_id = int(created_tag_id)
+                    else:
+                        tag_id = int(row["id"])
+                    desired_tag_ids.append(tag_id)
+                    conn.execute(
+                        """
+                        INSERT OR REPLACE INTO paper_tags(paper_id, tag_id, source_type, score, added_by_user_id, created_at, is_locked)
+                        VALUES (?, ?, ?, NULL, ?, ?, ?)
+                        """,
+                        (paper_id, tag_id, source_type, user_id, now, 1 if is_locked else 0),
+                    )
+
+                if desired_tag_ids:
+                    placeholders = ", ".join("?" for _ in desired_tag_ids)
+                    conn.execute(
+                        f"DELETE FROM paper_tags WHERE paper_id = ? AND source_type = ? AND tag_id NOT IN ({placeholders})",
+                        (paper_id, source_type, *desired_tag_ids),
+                    )
+                else:
+                    conn.execute(
+                        "DELETE FROM paper_tags WHERE paper_id = ? AND source_type = ?",
+                        (paper_id, source_type),
+                    )
+
     def remove_tag(self, rel_path: str, tag_id: int, *, is_admin: bool, acting_user_id: int | None) -> None:
         with self._write_lock:
             with self._connect() as conn:
@@ -1207,7 +1264,7 @@ class TeamStore:
                     JOIN tags t ON t.id = pt.tag_id
                     LEFT JOIN users u ON u.id = pt.added_by_user_id
                     WHERE pt.paper_id = ?
-                    ORDER BY CASE pt.source_type WHEN 'official' THEN 0 WHEN 'auto' THEN 1 ELSE 2 END, LOWER(t.name)
+                    ORDER BY CASE pt.source_type WHEN 'official' THEN 0 WHEN 'ai' THEN 1 WHEN 'auto' THEN 2 ELSE 3 END, LOWER(t.name)
                     """,
                     (paper_id,),
                 ).fetchall()

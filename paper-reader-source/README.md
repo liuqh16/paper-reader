@@ -37,20 +37,20 @@ The subproject also includes a long-running scheduler service that:
 - fetches the current Hugging Face Daily Papers page
 - saves papers whose `upvotes >= 5`
 - downloads each selected paper PDF into a per-day archive
-- writes one daily manifest plus a `papers/` directory under `paper-reader-source/data/huggingface_daily/YYYY/MM/DD/`
+- writes one daily manifest plus a `papers/` directory under `/vePFS-Mindverse/share/paper-reader/sources/huggingface_daily/YYYY/MM/DD/`
 
 Run it directly:
 
 ```bash
 PYTHONPATH=paper-reader-source python3 -m paper_reader_source.service \
-  --data-dir paper-reader-source/data/huggingface_daily
+  --data-dir /vePFS-Mindverse/share/paper-reader/sources/huggingface_daily
 ```
 
 Run one immediate collection for testing:
 
 ```bash
 PYTHONPATH=paper-reader-source python3 -m paper_reader_source.service \
-  --data-dir paper-reader-source/data/huggingface_daily \
+  --data-dir /vePFS-Mindverse/share/paper-reader/sources/huggingface_daily \
   --run-on-start --once
 ```
 

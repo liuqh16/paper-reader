@@ -21,11 +21,18 @@
 - Host: `0.0.0.0`
 - Port: `8022`
 
-### 默认论文库目录
+### 默认数据目录
 
-- `docs/papers/`
+所有论文和运行数据默认都保存在：
 
-这个目录中的文件会被自动扫描；你手动放进去的 PDF / Word 文件也会被识别。
+- `/vePFS-Mindverse/share/paper-reader/`
+
+其中主要子目录为：
+
+- `/vePFS-Mindverse/share/paper-reader/library/`：主论文库、Prompt 结果、DONE、设置和索引
+- `/vePFS-Mindverse/share/paper-reader/sources/huggingface_daily/`：Sources 页面使用的外部抓取归档
+
+放进 `library/` 的 PDF / Word 文件会被自动扫描识别。这样把运行目录放到共享盘后，团队成员就能围绕同一份论文库、同一套 Prompt 结果和同一批 Sources 数据协作。
 
 ### 默认登录信息
 
@@ -132,8 +139,11 @@ paper-reader/
 │   ├── source_archive.py
 │   ├── static/
 │   └── templates/
-├── tests/
-└── docs/papers/   # 本地论文库（默认）
+└── tests/
+
+/vePFS-Mindverse/share/paper-reader/
+├── library/                    # 主论文库（默认）
+└── sources/huggingface_daily/  # 外部来源归档（默认）
 ```
 
 ## 论文库说明
@@ -185,9 +195,9 @@ paper-reader/
 
 默认会从下面这个目录读取外部归档数据：
 
-- `paper-reader-source/data/huggingface_daily/`
+- `/vePFS-Mindverse/share/paper-reader/sources/huggingface_daily/`
 
-这个目录里的数据不会提交到 GitHub。
+这个目录位于仓库外，因此不会提交到 GitHub。
 
 ### Hugging Face 抓取子项目
 
@@ -205,7 +215,7 @@ paper-reader/
 
 ```bash
 PYTHONPATH=paper-reader-source python3 -m paper_reader_source.service \
-  --data-dir paper-reader-source/data/huggingface_daily \
+  --data-dir /vePFS-Mindverse/share/paper-reader/sources/huggingface_daily \
   --run-on-start --once
 ```
 
@@ -213,7 +223,7 @@ PYTHONPATH=paper-reader-source python3 -m paper_reader_source.service \
 
 ```bash
 PYTHONPATH=paper-reader-source python3 -m paper_reader_source.service \
-  --data-dir paper-reader-source/data/huggingface_daily
+  --data-dir /vePFS-Mindverse/share/paper-reader/sources/huggingface_daily
 ```
 
 或者直接用仓库里自带的脚本：
@@ -269,6 +279,6 @@ paper-reader-source/scripts/run_huggingface_daily_service.sh
 
 ## 开发备注
 
-- 本地论文库 `docs/papers/` 默认不会提交到 Git
+- 默认运行数据现在写到 `/vePFS-Mindverse/share/paper-reader/`，不会跟随仓库提交
 - 日志目录 `logs/` 默认不会提交到 Git
 - 运行过程中生成的本地状态文件也已加入 `.gitignore`

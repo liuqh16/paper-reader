@@ -12,6 +12,18 @@ from .ai_summary import DEFAULT_MODEL, DEFAULT_USER_PROMPT
 
 PROMPT_STORE_NAME = ".paper-reader-prompts.json"
 DEFAULT_PROMPT_SLUG = "core-zh"
+DEFAULT_TAG_PROMPT = (
+    "请直接阅读本地论文文件 `{document_path}`。\n\n"
+    "请根据论文内容生成 3 到 8 个适合团队检索的英文标签。\n"
+    "要求：\n"
+    "- 标签尽量短，小写英文\n"
+    "- 优先提取方法、任务、模态、应用领域、机构或模型名\n"
+    "- 可以包含连字符或空格，例如 `on-policy distillation`、`long-context`\n"
+    "- 避免输出过于空泛的词，例如 model、models、training、paper、method、approach\n"
+    "- 如果不确定，就不要硬猜\n\n"
+    "只输出 JSON 数组，不要附加解释。示例：\n"
+    "[\"lora\", \"finance\", \"coding\", \"deepseek\"]\n"
+)
 
 
 @dataclass
@@ -28,6 +40,15 @@ class PromptDefinition:
     version_id: int | None = None
     version: int = 1
     admin_only: bool = True
+
+
+@dataclass
+class TagPromptDefinition:
+    user_prompt: str
+    model: str
+    enabled: bool
+    created_at: str
+    updated_at: str
 
 
 class PromptStore:
@@ -70,6 +91,16 @@ class PromptStore:
                     created_at TEXT NOT NULL,
                     UNIQUE (prompt_id, version),
                     FOREIGN KEY (prompt_id) REFERENCES prompts(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS tag_prompt_config (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    user_prompt TEXT NOT NULL,
+                    model TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    updated_by_user_id INTEGER
                 );
                 """
             )
@@ -120,6 +151,82 @@ class PromptStore:
             if prompt.slug == slug:
                 return prompt
         return None
+
+    def default_tag_prompt(self) -> TagPromptDefinition:
+        now = datetime.utcnow().isoformat(timespec="seconds")
+        return TagPromptDefinition(
+            user_prompt=DEFAULT_TAG_PROMPT,
+            model=DEFAULT_MODEL,
+            enabled=True,
+            created_at=now,
+            updated_at=now,
+        )
+
+    def get_tag_prompt(self) -> TagPromptDefinition:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT enabled, user_prompt, model, created_at, updated_at FROM tag_prompt_config WHERE id = 1"
+            ).fetchone()
+            if row is None:
+                prompt = self.default_tag_prompt()
+                conn.execute(
+                    """
+                    INSERT INTO tag_prompt_config(id, enabled, user_prompt, model, created_at, updated_at, updated_by_user_id)
+                    VALUES (1, ?, ?, ?, ?, ?, NULL)
+                    """,
+                    (
+                        1 if prompt.enabled else 0,
+                        prompt.user_prompt,
+                        prompt.model,
+                        prompt.created_at,
+                        prompt.updated_at,
+                    ),
+                )
+                return prompt
+        return TagPromptDefinition(
+            user_prompt=str(row["user_prompt"]),
+            model=str(row["model"] or DEFAULT_MODEL),
+            enabled=bool(row["enabled"]),
+            created_at=str(row["created_at"]),
+            updated_at=str(row["updated_at"]),
+        )
+
+    def save_tag_prompt(
+        self,
+        *,
+        user_prompt: str,
+        model: str,
+        enabled: bool,
+        updated_by_user_id: int | None = None,
+    ) -> TagPromptDefinition:
+        user_prompt = user_prompt.strip()
+        model = model.strip() or DEFAULT_MODEL
+        if not user_prompt:
+            raise ValueError("标签 Prompt 内容不能为空。")
+        existing = self.get_tag_prompt()
+        now = datetime.utcnow().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO tag_prompt_config(id, enabled, user_prompt, model, created_at, updated_at, updated_by_user_id)
+                VALUES (1, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    enabled = excluded.enabled,
+                    user_prompt = excluded.user_prompt,
+                    model = excluded.model,
+                    updated_at = excluded.updated_at,
+                    updated_by_user_id = excluded.updated_by_user_id
+                """,
+                (
+                    1 if enabled else 0,
+                    user_prompt,
+                    model,
+                    existing.created_at,
+                    now,
+                    updated_by_user_id,
+                ),
+            )
+        return self.get_tag_prompt()
 
     def active_prompts(self) -> list[PromptDefinition]:
         return [prompt for prompt in self.list_prompts() if prompt.enabled]

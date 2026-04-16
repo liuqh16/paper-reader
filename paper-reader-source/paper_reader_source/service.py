@@ -17,7 +17,8 @@ BEIJING_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_SCHEDULE_TIME = time(hour=18, minute=30)
 DEFAULT_POLL_SECONDS = 30
 DEFAULT_MIN_UPVOTES = 5
-DEFAULT_DATA_DIR_NAME = "data/huggingface_daily"
+DEFAULT_STORAGE_ROOT = Path("/vePFS-Mindverse/share/paper-reader")
+DEFAULT_DATA_DIR = DEFAULT_STORAGE_ROOT / "sources" / "huggingface_daily"
 STATE_FILE_NAME = "service_state.json"
 MANIFEST_FILE_NAME = "manifest.json"
 PDF_SUBDIR_NAME = "papers"
@@ -64,7 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--data-dir",
-        default=str(Path(__file__).resolve().parents[1] / DEFAULT_DATA_DIR_NAME),
+        default=str(DEFAULT_DATA_DIR),
         help="Directory where daily snapshots and PDFs are saved.",
     )
     parser.add_argument(
