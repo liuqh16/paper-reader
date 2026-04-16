@@ -22,6 +22,10 @@
 }
 
 * { box-sizing: border-box; }
+[hidden],
+.is-hidden {
+  display: none !important;
+}
 html, body { height: 100%; }
 body {
   margin: 0;
@@ -1703,6 +1707,10 @@ button:disabled,
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+.viewer-tag-empty {
+  color: var(--muted);
+  font-size: var(--font-meta);
+}
 .compact-tag-chip {
   padding: 4px 8px;
   font-size: var(--font-meta);
@@ -1722,9 +1730,17 @@ button:disabled,
   color: var(--brand-deep);
   font-size: var(--font-meta);
 }
+.add-tag-chip {
+  min-width: 28px;
+  padding: 4px 8px;
+  font-weight: 700;
+}
 .viewer-inline-tags-panel {
   display: grid;
   gap: 8px;
+  padding: 0 8px 6px;
+}
+.viewer-tag-editor {
   padding: 0 8px 6px;
 }
 .inline-tag-list {
@@ -1738,7 +1754,13 @@ button:disabled,
   min-width: 0;
 }
 .viewer-compact-form {
-  margin-top: 8px;
+  margin-top: 0;
+}
+.viewer-compact-form input {
+  border-radius: 999px;
+}
+.viewer-compact-form button {
+  border-radius: 999px;
 }
 .viewer-meta-inline {
   display: flex;
@@ -1911,6 +1933,7 @@ button:disabled,
 }
 .workspace-shell.center-collapsed .viewer-head-flat,
 .workspace-shell.center-collapsed .viewer-inline-tags-panel,
+.workspace-shell.center-collapsed .viewer-tag-editor,
 .workspace-shell.center-collapsed .viewer-tabs,
 .workspace-shell.center-collapsed [data-center-stage] {
   display: none;

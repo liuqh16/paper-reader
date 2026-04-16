@@ -218,8 +218,9 @@
             {% elif selected_paper_context.tags %}
               <button type="button" class="ghost-button compact-tag-toggle" data-collapsible-toggle="tags-inline" data-extra-count="0" aria-expanded="false">+</button>
             {% else %}
-              <button type="button" class="ghost-button compact-tag-toggle" data-collapsible-toggle="tags-inline" data-extra-count="0" aria-expanded="false">+ 标签</button>
+              <span class="viewer-tag-empty">还没有标签</span>
             {% endif %}
+            <button type="button" class="ghost-button compact-tag-toggle add-tag-chip" data-collapsible-toggle="tag-editor" aria-expanded="false">+</button>
           </div>
         </div>
       </div>
@@ -247,6 +248,9 @@
             <p class="team-empty-copy">还没有标签，先加几个关键词，之后找起来会更快。</p>
           {% endfor %}
         </div>
+      </div>
+
+      <div class="viewer-tag-editor" data-collapsible-body="tag-editor" hidden>
         <form action="{{ url_for('tag_add_route') }}" method="post" class="team-inline-form compact-form viewer-compact-form">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
@@ -254,7 +258,7 @@
           <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
           <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
           <input type="hidden" name="tab" value="{{ selected_tab }}">
-          <input type="text" name="tag_name" placeholder="添加标签，例如：diffusion / robotics">
+          <input type="text" name="tag_name" placeholder="输入一个标签，例如：diffusion / robotics">
           <button type="submit">添加</button>
         </form>
       </div>
@@ -1546,9 +1550,13 @@
         const button = document.querySelector(`[data-collapsible-toggle="${CSS.escape(name)}"]`);
         if (!body || !button) return;
         body.hidden = !expanded;
+        body.classList.toggle("is-hidden", !expanded);
+        body.style.display = expanded ? "" : "none";
         if (name === "tags-inline") {
           const extraCount = Number(button.dataset.extraCount || "0");
-          button.textContent = expanded ? "收起标签" : (extraCount > 0 ? `+${extraCount}` : "+ 标签");
+          button.textContent = expanded ? "收起标签" : (extraCount > 0 ? `+${extraCount}` : "+");
+        } else if (name === "tag-editor") {
+          button.textContent = expanded ? "×" : "+";
         } else {
           button.textContent = expanded ? "收起" : "展开";
         }
@@ -1559,7 +1567,7 @@
         collapsibleButtons.forEach((button) => {
           const name = button.dataset.collapsibleToggle || "";
           if (!name) return;
-          const defaultExpanded = name === "tags-inline" ? false : true;
+          const defaultExpanded = !["tags-inline", "tag-editor"].includes(name);
           const expanded = Object.prototype.hasOwnProperty.call(collapsibleState, name)
             ? collapsibleState[name] !== false
             : defaultExpanded;
@@ -1586,7 +1594,10 @@
           button.setAttribute("aria-pressed", active ? "true" : "false");
         });
         chatPanels.forEach((panel) => {
-          panel.hidden = (panel.dataset.chatPanel || "") !== nextTarget;
+          const visible = (panel.dataset.chatPanel || "") === nextTarget;
+          panel.hidden = !visible;
+          panel.classList.toggle("is-hidden", !visible);
+          panel.style.display = visible ? "" : "none";
         });
       }
 

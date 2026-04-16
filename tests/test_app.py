@@ -1006,7 +1006,7 @@ class PaperReaderAppTests(unittest.TestCase):
 
         self.assertIn("touch-action: none;", css)
         self.assertIn(
-            ".workspace-shell.center-collapsed .viewer-head-flat,\n.workspace-shell.center-collapsed .viewer-inline-tags-panel,\n.workspace-shell.center-collapsed .viewer-tabs,\n.workspace-shell.center-collapsed [data-center-stage] {\n  display: none;",
+            ".workspace-shell.center-collapsed .viewer-head-flat,\n.workspace-shell.center-collapsed .viewer-inline-tags-panel,\n.workspace-shell.center-collapsed .viewer-tag-editor,\n.workspace-shell.center-collapsed .viewer-tabs,\n.workspace-shell.center-collapsed [data-center-stage] {\n  display: none;",
             css,
         )
         self.assertIn(
