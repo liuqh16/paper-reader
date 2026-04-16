@@ -6,8 +6,7 @@
     <div class="pane-top pane-top-compact">
       <div>
         <p class="eyebrow">左栏</p>
-        <h2>推荐列表与论文索引</h2>
-        <p class="sidebar-copy">上面先看最近更值得翻的论文，下面再查找和打开具体文章。</p>
+        <h2>推荐列表 / 找论文</h2>
       </div>
       <button type="button" class="icon-button pane-toggle" data-pane-button="left" data-toggle-pane="left" title="折叠左栏" aria-label="折叠左栏">
         <span class="icon-shell" aria-hidden="true">
@@ -21,7 +20,13 @@
       </button>
     </div>
 
-    <section class="assistant-card sidebar-recommendation-panel">
+    <div class="assistant-switch-row compact-switch-row sidebar-switch-row" role="tablist" aria-label="左栏区域切换">
+      <button type="button" class="assistant-switch-button" data-sidebar-switch="recommendations" aria-pressed="false">推荐列表</button>
+      <button type="button" class="assistant-switch-button" data-sidebar-switch="library" aria-pressed="false">找论文</button>
+    </div>
+
+    <div class="sidebar-panel-stack">
+      <section class="assistant-card sidebar-recommendation-panel" data-sidebar-panel="recommendations">
       <div class="team-paper-card-head compact-head">
         <div>
           <strong>推荐列表</strong>
@@ -60,124 +65,158 @@
           <p class="team-empty-copy">最近两周里还没有形成明显共识的论文，等大家多点几个赞，这里就会慢慢浮出来。</p>
         {% endfor %}
       </div>
-    </section>
+      </section>
 
-    <div class="sidebar-index-head">
-      <strong>论文索引</strong>
-      <span><span id="paper-count">{{ papers|length }}</span> 篇</span>
-    </div>
-
-    <form class="nav-filter-form" action="{{ url_for('index') }}" method="get">
-      <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
-      <input type="hidden" name="tab" value="{{ selected_tab }}">
-      <label>
-        <span>搜索</span>
-        <input type="search" name="q" value="{{ query }}" placeholder="标题、标签、推荐人、来源">
-      </label>
-      <label>
-        <span>文件夹</span>
-        <select name="folder">
-          <option value="" {% if not current_folder %}selected{% endif %}>全部文件夹</option>
-          {% for folder in folders %}
-            {% if folder %}
-              <option value="{{ folder }}" {% if current_folder == folder %}selected{% endif %}>{{ folder }}</option>
-            {% endif %}
-          {% endfor %}
-        </select>
-      </label>
-      <label>
-        <span>排序</span>
-        <select name="sort">
-          <option value="date_desc" {% if sort_by == 'date_desc' %}selected{% endif %}>日期从新到旧</option>
-          <option value="date_asc" {% if sort_by == 'date_asc' %}selected{% endif %}>日期从旧到新</option>
-          <option value="title" {% if sort_by == 'title' %}selected{% endif %}>按标题</option>
-        </select>
-      </label>
-      <label class="checkbox-line done-toggle-line">
-        <input type="checkbox" name="show_done" value="1" {% if show_done %}checked{% endif %}>
-        显示 DONE 论文
-      </label>
-      <div class="tool-actions nav-filter-actions">
-        <button type="submit">更新列表</button>
-      </div>
-    </form>
-
-    {% if papers %}
-      <div class="paper-tree-scroll" id="paper-tree-scroll">
-        <div class="paper-compact-list paper-group-tree" id="paper-list" data-sort="{{ sort_by }}">
-          {% for year_group in sidebar_groups %}
-            <details class="paper-year-group" data-year-key="{{ year_group.key }}" {% if year_group.is_open %}open{% endif %}>
-              <summary>
-                <span>{{ year_group.label }}</span>
-                <small>{{ year_group.count }}</small>
-              </summary>
-              <div class="paper-month-group-list">
-                {% for month_group in year_group.months %}
-                  <details class="paper-month-group" data-year-key="{{ year_group.key }}" data-month-key="{{ month_group.key }}" {% if month_group.is_open %}open{% endif %}>
-                    <summary>
-                      <span>{{ month_group.label }}</span>
-                      <small>{{ month_group.count }}</small>
-                    </summary>
-                    <div class="paper-month-list">
-                      {% for paper in month_group.papers %}
-                        <a
-                          class="paper-row {% if selected_paper and paper.rel_path == selected_paper.rel_path %}active{% endif %}"
-                          data-rel-path="{{ paper.rel_path }}"
-                          data-display-title="{{ paper.display_title|lower }}"
-                          data-file-name="{{ paper.file_name|lower }}"
-                          data-sort-date="{{ paper.sort_date or '' }}"
-                          data-folder="{{ paper.folder }}"
-                          data-done="{{ 1 if paper.is_done else 0 }}"
-                          data-year-key="{{ year_group.key }}"
-                          data-month-key="{{ month_group.key }}"
-                          href="{{ url_for('index', folder=current_folder, q=query, sort=sort_by, paper=paper.rel_path, tab=selected_tab if selected_paper and paper.rel_path == selected_paper.rel_path else 'source', show_done='1' if show_done else None) }}"
-                        >
-                          <div class="paper-row-top">
-                            <span class="paper-row-type">{{ paper.extension }}</span>
-                            {% if paper.extracted_date %}
-                              <span class="paper-row-date">{{ paper.extracted_date }}</span>
-                            {% endif %}
-                          </div>
-                          <strong class="paper-row-title">{{ paper.display_title }}</strong>
-                          <span class="paper-row-file">{{ paper.file_name }}</span>
-                          <div class="paper-row-bottom">
-                            <div class="paper-row-flags">
-                              {% if paper.folder %}<span class="paper-row-folder">{{ paper.folder }}</span>{% endif %}
-                              {% if paper.is_done %}<span class="paper-row-done">DONE</span>{% endif %}
-                            </div>
-                            <span class="paper-row-summary">{{ paper.prompt_result_count }}/{{ active_prompt_count }}</span>
-                          </div>
-                        </a>
-                      {% endfor %}
-                    </div>
-                  </details>
-                {% endfor %}
-              </div>
-            </details>
-          {% endfor %}
+      <section class="sidebar-library-panel" data-sidebar-panel="library" hidden>
+        <div class="sidebar-index-head">
+          <strong>论文索引</strong>
+          <span><span id="paper-count">{{ papers|length }}</span> 篇</span>
         </div>
-      </div>
-    {% else %}
-      <div class="compact-empty" id="paper-list-empty">
-        <h3>没有匹配结果</h3>
-        <p>试试换个关键词，或者点右下角圆形按钮导入、上传论文。</p>
-      </div>
-    {% endif %}
+
+        <form class="nav-filter-form" action="{{ url_for('index') }}" method="get">
+          <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
+          <input type="hidden" name="tab" value="{{ selected_tab }}">
+          <label>
+            <span>搜索</span>
+            <input type="search" name="q" value="{{ query }}" placeholder="标题、标签、推荐人、来源">
+          </label>
+          <label>
+            <span>文件夹</span>
+            <select name="folder">
+              <option value="" {% if not current_folder %}selected{% endif %}>全部文件夹</option>
+              {% for folder in folders %}
+                {% if folder %}
+                  <option value="{{ folder }}" {% if current_folder == folder %}selected{% endif %}>{{ folder }}</option>
+                {% endif %}
+              {% endfor %}
+            </select>
+          </label>
+          <label>
+            <span>排序</span>
+            <select name="sort">
+              <option value="date_desc" {% if sort_by == 'date_desc' %}selected{% endif %}>日期从新到旧</option>
+              <option value="date_asc" {% if sort_by == 'date_asc' %}selected{% endif %}>日期从旧到新</option>
+              <option value="title" {% if sort_by == 'title' %}selected{% endif %}>按标题</option>
+            </select>
+          </label>
+          <label class="checkbox-line done-toggle-line">
+            <input type="checkbox" name="show_done" value="1" {% if show_done %}checked{% endif %}>
+            显示 DONE 论文
+          </label>
+          <div class="tool-actions nav-filter-actions">
+            <button type="submit">更新列表</button>
+          </div>
+        </form>
+
+        {% if papers %}
+          <div class="paper-tree-scroll" id="paper-tree-scroll">
+            <div class="paper-compact-list paper-group-tree" id="paper-list" data-sort="{{ sort_by }}">
+              {% for year_group in sidebar_groups %}
+                <details class="paper-year-group" data-year-key="{{ year_group.key }}" {% if year_group.is_open %}open{% endif %}>
+                  <summary>
+                    <span>{{ year_group.label }}</span>
+                    <small>{{ year_group.count }}</small>
+                  </summary>
+                  <div class="paper-month-group-list">
+                    {% for month_group in year_group.months %}
+                      <details class="paper-month-group" data-year-key="{{ year_group.key }}" data-month-key="{{ month_group.key }}" {% if month_group.is_open %}open{% endif %}>
+                        <summary>
+                          <span>{{ month_group.label }}</span>
+                          <small>{{ month_group.count }}</small>
+                        </summary>
+                        <div class="paper-month-list">
+                          {% for paper in month_group.papers %}
+                            <a
+                              class="paper-row {% if selected_paper and paper.rel_path == selected_paper.rel_path %}active{% endif %}"
+                              data-rel-path="{{ paper.rel_path }}"
+                              data-display-title="{{ paper.display_title|lower }}"
+                              data-file-name="{{ paper.file_name|lower }}"
+                              data-sort-date="{{ paper.sort_date or '' }}"
+                              data-folder="{{ paper.folder }}"
+                              data-done="{{ 1 if paper.is_done else 0 }}"
+                              data-year-key="{{ year_group.key }}"
+                              data-month-key="{{ month_group.key }}"
+                              href="{{ url_for('index', folder=current_folder, q=query, sort=sort_by, paper=paper.rel_path, tab=selected_tab if selected_paper and paper.rel_path == selected_paper.rel_path else 'source', show_done='1' if show_done else None) }}"
+                            >
+                              <div class="paper-row-top">
+                                <span class="paper-row-type">{{ paper.extension }}</span>
+                                {% if paper.extracted_date %}
+                                  <span class="paper-row-date">{{ paper.extracted_date }}</span>
+                                {% endif %}
+                              </div>
+                              <strong class="paper-row-title">{{ paper.display_title }}</strong>
+                              <span class="paper-row-file">{{ paper.file_name }}</span>
+                              <div class="paper-row-bottom">
+                                <div class="paper-row-flags">
+                                  {% if paper.folder %}<span class="paper-row-folder">{{ paper.folder }}</span>{% endif %}
+                                  {% if paper.is_done %}<span class="paper-row-done">DONE</span>{% endif %}
+                                </div>
+                                <span class="paper-row-summary">{{ paper.prompt_result_count }}/{{ active_prompt_count }}</span>
+                              </div>
+                            </a>
+                          {% endfor %}
+                        </div>
+                      </details>
+                    {% endfor %}
+                  </div>
+                </details>
+              {% endfor %}
+            </div>
+          </div>
+        {% else %}
+          <div class="compact-empty" id="paper-list-empty">
+            <h3>没有匹配结果</h3>
+            <p>试试换个关键词，或者点右下角圆形按钮导入、上传论文。</p>
+          </div>
+        {% endif %}
+      </section>
+    </div>
   </aside>
 
   <div class="pane-resizer pane-resizer-left" data-resizer="left" aria-hidden="true"></div>
 
   <section class="viewer-pane card layout-pane pane-center" data-pane="center">
     <div class="viewer-toolbar viewer-toolbar-slim">
-      <div class="viewer-toolbar-copy">
+      <div class="viewer-toolbar-main">
+        <div class="viewer-toolbar-copy">
+          {% if selected_paper %}
+            <p class="eyebrow">原文阅读</p>
+            <h2>{{ selected_paper.display_title }}</h2>
+            <p class="viewer-subtitle">{{ selected_paper.file_name }} · {{ format_bytes(selected_paper.file_size) }}</p>
+          {% else %}
+            <p class="eyebrow">原文阅读</p>
+            <h2>原文与标签</h2>
+            <p class="viewer-subtitle">选中一篇论文后，这里会显示原文和已经生成的分析结果。</p>
+          {% endif %}
+        </div>
         {% if selected_paper %}
-          <p class="eyebrow">原文阅读</p>
-          <h2>{{ selected_paper.display_title }}</h2>
-          <p class="viewer-subtitle">{{ selected_paper.file_name }} · {{ format_bytes(selected_paper.file_size) }}</p>
-        {% else %}
-          <p class="eyebrow">原文阅读</p>
-          <h2>原文与标签</h2>
-          <p class="viewer-subtitle">选中一篇论文后，这里会显示原文和已经生成的分析结果。</p>
+          <div class="viewer-tabs viewer-tabs-inline">
+            <a
+              class="viewer-tab {% if selected_tab == 'source' %}active{% endif %}"
+              href="{{ url_for('index', folder=current_folder, q=query, sort=sort_by, paper=selected_paper.rel_path, tab='source', show_done='1' if show_done else None) }}"
+            >
+              原文
+            </a>
+            {% for tab in viewer_tabs %}
+              <a
+                class="viewer-tab {% if selected_tab == tab.slug %}active{% endif %} {% if not tab.exists %}pending{% endif %}"
+                href="{{ url_for('index', folder=current_folder, q=query, sort=sort_by, paper=selected_paper.rel_path, tab=tab.slug, show_done='1' if show_done else None) }}"
+              >
+                <span>{{ tab.name }}</span>
+                <small>
+                  {% if tab.job_status == 'running' %}
+                    生成中 {{ tab.job_progress }}%
+                  {% elif tab.job_status == 'queued' %}
+                    等待生成
+                  {% elif tab.exists %}
+                    已生成
+                  {% else %}
+                    还没生成
+                  {% endif %}
+                </small>
+              </a>
+            {% endfor %}
+          </div>
         {% endif %}
       </div>
       <div class="viewer-toolbar-status">
@@ -199,6 +238,20 @@
     </div>
 
     {% if selected_paper %}
+      {% set tag_groups = namespace(summary=[], overflow=[], seen=[]) %}
+      {% for tag in selected_paper_context.tags %}
+        {% set tag_key = tag.slug or tag.name|lower %}
+        {% if tag_key not in tag_groups.seen %}
+          {% set _ = tag_groups.seen.append(tag_key) %}
+          {% if tag_groups.summary|length < 4 %}
+            {% set _ = tag_groups.summary.append(tag) %}
+          {% else %}
+            {% set _ = tag_groups.overflow.append(tag) %}
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+      {% set summary_tags = tag_groups.summary %}
+      {% set overflow_tags = tag_groups.overflow %}
       <div class="viewer-head viewer-head-compact viewer-head-flat">
         <div class="viewer-meta-tags">
           <div class="viewer-meta viewer-meta-inline">
@@ -208,46 +261,47 @@
             <span>{{ selected_paper_context.comment_count }} 条评论</span>
           </div>
           <div class="viewer-tag-summary">
-            {% for tag in selected_paper_context.tags[:4] %}
+            {% for tag in summary_tags %}
               <div class="team-tag-chip source-{{ tag.source_type }} compact-tag-chip">
                 <span>#{{ tag.name }}</span>
               </div>
             {% endfor %}
-            {% if selected_paper_context.tags|length > 4 %}
-              <button type="button" class="ghost-button compact-tag-toggle" data-collapsible-toggle="tags-inline" data-extra-count="{{ selected_paper_context.tags|length - 4 }}" aria-expanded="false">+{{ selected_paper_context.tags|length - 4 }}</button>
-            {% elif selected_paper_context.tags %}
-              <button type="button" class="ghost-button compact-tag-toggle" data-collapsible-toggle="tags-inline" data-extra-count="0" aria-expanded="false">+</button>
-            {% else %}
+            {% if overflow_tags %}
+              <button type="button" class="ghost-button compact-tag-toggle" data-collapsible-toggle="tags-inline" data-extra-count="{{ overflow_tags|length }}" aria-expanded="false" title="展开更多标签">+{{ overflow_tags|length }}</button>
+            {% elif not summary_tags %}
               <span class="viewer-tag-empty">还没有标签</span>
             {% endif %}
-            <button type="button" class="ghost-button compact-tag-toggle add-tag-chip" data-collapsible-toggle="tag-editor" aria-expanded="false">+</button>
+            <button type="button" class="ghost-button compact-tag-toggle add-tag-chip" data-collapsible-toggle="tag-editor" aria-expanded="false">添标签</button>
           </div>
         </div>
       </div>
 
       <div class="viewer-inline-tags-panel" data-collapsible-body="tags-inline" hidden>
-        <div class="team-chip-list compact-chip-list inline-tag-list">
-          {% for tag in selected_paper_context.tags %}
-            <div class="team-tag-chip source-{{ tag.source_type }}">
-              <span>#{{ tag.name }}</span>
-              <small>{{ 'AI' if tag.source_type == 'auto' else ('官方' if tag.source_type == 'official' else '手动') }}</small>
-              {% if is_admin or (tag.source_type == 'manual' and current_user and current_user.display_name == tag.added_by_display_name) %}
-                <form action="{{ url_for('tag_remove_route') }}" method="post" class="inline-form">
-                  <input type="hidden" name="folder" value="{{ current_folder }}">
-                  <input type="hidden" name="q" value="{{ query }}">
-                  <input type="hidden" name="sort" value="{{ sort_by }}">
-                  <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-                  <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-                  <input type="hidden" name="tab" value="{{ selected_tab }}">
-                  <input type="hidden" name="tag_id" value="{{ tag.id }}">
-                  <button type="submit" class="ghost-button">×</button>
-                </form>
-              {% endif %}
-            </div>
-          {% else %}
-            <p class="team-empty-copy">还没有标签，先加几个关键词，之后找起来会更快。</p>
-          {% endfor %}
-        </div>
+        {% if overflow_tags %}
+          <div class="viewer-inline-tags-label">更多标签</div>
+          <div class="team-chip-list compact-chip-list inline-tag-list">
+            {% for tag in overflow_tags %}
+              <div class="team-tag-chip source-{{ tag.source_type }}">
+                <span>#{{ tag.name }}</span>
+                <small>{{ 'AI' if tag.source_type == 'auto' else ('官方' if tag.source_type == 'official' else '手动') }}</small>
+                {% if is_admin or (tag.source_type == 'manual' and current_user and current_user.display_name == tag.added_by_display_name) %}
+                  <form action="{{ url_for('tag_remove_route') }}" method="post" class="inline-form">
+                    <input type="hidden" name="folder" value="{{ current_folder }}">
+                    <input type="hidden" name="q" value="{{ query }}">
+                    <input type="hidden" name="sort" value="{{ sort_by }}">
+                    <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+                    <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+                    <input type="hidden" name="tab" value="{{ selected_tab }}">
+                    <input type="hidden" name="tag_id" value="{{ tag.id }}">
+                    <button type="submit" class="ghost-button">×</button>
+                  </form>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="team-empty-copy">上面已经显示全部标签了。</p>
+        {% endif %}
       </div>
 
       <div class="viewer-tag-editor" data-collapsible-body="tag-editor" hidden>
@@ -261,34 +315,6 @@
           <input type="text" name="tag_name" placeholder="输入一个标签，例如：diffusion / robotics">
           <button type="submit">添加</button>
         </form>
-      </div>
-
-      <div class="viewer-tabs">
-        <a
-          class="viewer-tab {% if selected_tab == 'source' %}active{% endif %}"
-          href="{{ url_for('index', folder=current_folder, q=query, sort=sort_by, paper=selected_paper.rel_path, tab='source', show_done='1' if show_done else None) }}"
-        >
-          原文
-        </a>
-        {% for tab in viewer_tabs %}
-          <a
-            class="viewer-tab {% if selected_tab == tab.slug %}active{% endif %} {% if not tab.exists %}pending{% endif %}"
-            href="{{ url_for('index', folder=current_folder, q=query, sort=sort_by, paper=selected_paper.rel_path, tab=tab.slug, show_done='1' if show_done else None) }}"
-          >
-            <span>{{ tab.name }}</span>
-            <small>
-              {% if tab.job_status == 'running' %}
-                生成中 {{ tab.job_progress }}%
-              {% elif tab.job_status == 'queued' %}
-                等待生成
-              {% elif tab.exists %}
-                已生成
-              {% else %}
-                还没生成
-              {% endif %}
-            </small>
-          </a>
-        {% endfor %}
       </div>
 
       <div class="reader-stage" data-center-stage>
@@ -430,7 +456,6 @@
       <div>
         <p class="eyebrow">边看边聊</p>
         <h2>我爱学 / 一起学</h2>
-        <p class="sidebar-copy">右边只显示一个聊天区域；点“我爱学”或“一起学”时，会直接切换到对应那一块。</p>
       </div>
       <button type="button" class="icon-button pane-toggle" data-pane-button="right" data-toggle-pane="right" title="折叠右栏" aria-label="折叠右栏">
         <span class="icon-shell" aria-hidden="true">
@@ -1001,6 +1026,8 @@
       const chatForms = Array.from(document.querySelectorAll("[data-chat-form]"));
       const chatSwitchButtons = Array.from(document.querySelectorAll("[data-chat-switch]"));
       const chatPanels = Array.from(document.querySelectorAll("[data-chat-panel]"));
+      const sidebarSwitchButtons = Array.from(document.querySelectorAll("[data-sidebar-switch]"));
+      const sidebarPanels = Array.from(document.querySelectorAll("[data-sidebar-panel]"));
       const chatThreads = {
         shared: document.querySelector('[data-chat-thread="shared"]'),
         private: document.querySelector('[data-chat-thread="private"]'),
@@ -1033,6 +1060,7 @@
       const layoutStateKey = "paper-reader-layout-v4";
       const collapsibleStateKey = "paper-reader-collapsible-v1";
       const chatPanelStateKey = "paper-reader-chat-panel-v1";
+      const sidebarPanelStateKey = "paper-reader-sidebar-panel-v1";
       const defaultLayoutState = {
         leftWidth: 264,
         rightWidth: 388,
@@ -1047,6 +1075,7 @@
       let layoutState = loadLayoutState();
       let collapsibleState = loadCollapsibleState();
       let activeChatPanel = loadSimpleValue(chatPanelStateKey, "private");
+      let activeSidebarPanel = loadSimpleValue(sidebarPanelStateKey, "library");
       let settingsReturnFocus = null;
 
       function loadLayoutState() {
@@ -1554,9 +1583,10 @@
         body.style.display = expanded ? "" : "none";
         if (name === "tags-inline") {
           const extraCount = Number(button.dataset.extraCount || "0");
-          button.textContent = expanded ? "收起标签" : (extraCount > 0 ? `+${extraCount}` : "+");
+          button.textContent = expanded ? "<" : (extraCount > 0 ? `+${extraCount}` : "+");
+          button.title = expanded ? "收起更多标签" : "展开更多标签";
         } else if (name === "tag-editor") {
-          button.textContent = expanded ? "×" : "+";
+          button.textContent = expanded ? "收起" : "添标签";
         } else {
           button.textContent = expanded ? "收起" : "展开";
         }
@@ -1584,20 +1614,31 @@
         });
       }
 
-      function applyChatPanel(target) {
-        const available = new Set(chatPanels.map((panel) => panel.dataset.chatPanel || ""));
-        const nextTarget = available.has(target) ? target : "private";
-        activeChatPanel = nextTarget;
-        chatSwitchButtons.forEach((button) => {
-          const active = (button.dataset.chatSwitch || "") === nextTarget;
+      function applySinglePanelSwitch({ buttons, panels, target, fallback, buttonAttribute, panelAttribute }) {
+        const available = new Set(panels.map((panel) => panel.dataset[panelAttribute] || ""));
+        const nextTarget = available.has(target) ? target : fallback;
+        buttons.forEach((button) => {
+          const active = (button.dataset[buttonAttribute] || "") === nextTarget;
           button.classList.toggle("is-active", active);
           button.setAttribute("aria-pressed", active ? "true" : "false");
         });
-        chatPanels.forEach((panel) => {
-          const visible = (panel.dataset.chatPanel || "") === nextTarget;
+        panels.forEach((panel) => {
+          const visible = (panel.dataset[panelAttribute] || "") === nextTarget;
           panel.hidden = !visible;
           panel.classList.toggle("is-hidden", !visible);
           panel.style.display = visible ? "" : "none";
+        });
+        return nextTarget;
+      }
+
+      function applyChatPanel(target) {
+        activeChatPanel = applySinglePanelSwitch({
+          buttons: chatSwitchButtons,
+          panels: chatPanels,
+          target,
+          fallback: "private",
+          buttonAttribute: "chatSwitch",
+          panelAttribute: "chatPanel",
         });
       }
 
@@ -1608,6 +1649,28 @@
           button.addEventListener("click", () => {
             applyChatPanel(button.dataset.chatSwitch || "private");
             persistSimpleValue(chatPanelStateKey, activeChatPanel);
+          });
+        });
+      }
+
+      function applySidebarPanel(target) {
+        activeSidebarPanel = applySinglePanelSwitch({
+          buttons: sidebarSwitchButtons,
+          panels: sidebarPanels,
+          target,
+          fallback: "library",
+          buttonAttribute: "sidebarSwitch",
+          panelAttribute: "sidebarPanel",
+        });
+      }
+
+      function initializeSidebarPanelSwitch() {
+        if (!sidebarSwitchButtons.length || !sidebarPanels.length) return;
+        applySidebarPanel(activeSidebarPanel);
+        sidebarSwitchButtons.forEach((button) => {
+          button.addEventListener("click", () => {
+            applySidebarPanel(button.dataset.sidebarSwitch || "library");
+            persistSimpleValue(sidebarPanelStateKey, activeSidebarPanel);
           });
         });
       }
@@ -1978,6 +2041,7 @@
 
       initializeCollapsibleCards();
       initializeChatPanelSwitch();
+      initializeSidebarPanelSwitch();
 
       if (dashboard) {
         renderJobs(initialData);
