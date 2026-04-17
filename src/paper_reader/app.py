@@ -24,6 +24,9 @@ from werkzeug.utils import secure_filename
 from .ai_summary import DEFAULT_MODEL, DEFAULT_USER_PROMPT, run_prompt_on_document
 from .chat_queue import PaperChatQueue
 from .document_utils import ALLOWED_EXTENSIONS, extract_document_metadata
+from .insights_history import HistoricalInsightsStore
+from .insights_momentum import MomentumInsightsStore
+from .insights_opportunity import OpportunityInsightsStore
 from .markdown_render import render_markdown
 from .offline_package import build_offline_manifest, manifest_json as build_manifest_json, offline_prompt_arcname, offline_source_arcname
 from .prompt_manager import DEFAULT_PROMPT_SLUG, PromptDefinition, PromptStore, parse_checkbox
@@ -1380,6 +1383,9 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     app.prompt_store = PromptStore(app.config["LIBRARY_ROOT"], app.team_store.db_path)  # type: ignore[attr-defined]
     app.library = PaperLibrary(app.config["LIBRARY_ROOT"], app.prompt_store, app.team_store)  # type: ignore[attr-defined]
     app.login_guard = LoginGuard()  # type: ignore[attr-defined]
+    app.history_store = HistoricalInsightsStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
+    app.momentum_store = MomentumInsightsStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
+    app.opportunity_store = OpportunityInsightsStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
     app.job_queue = PaperJobQueue(  # type: ignore[attr-defined]
         app.library,
         app.prompt_store,
@@ -2949,6 +2955,90 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             source_groups=source_groups,
             source_day_count=len(day_records),
         )
+
+    @app.get("/insights")
+    def insights_index() -> Any:
+        payload = app.history_store.load_history()  # type: ignore[attr-defined]
+        status = app.history_store.status_snapshot()  # type: ignore[attr-defined]
+        momentum_payload = app.momentum_store.load_dashboard()  # type: ignore[attr-defined]
+        momentum_status = app.momentum_store.status_snapshot()  # type: ignore[attr-defined]
+        opportunity_payload = app.opportunity_store.load_map()  # type: ignore[attr-defined]
+        opportunity_status = app.opportunity_store.status_snapshot()  # type: ignore[attr-defined]
+        return render_template(
+            "insights.html",
+            insights_payload=payload,
+            insights_status=status,
+            momentum_payload=momentum_payload,
+            momentum_status=momentum_status,
+            opportunity_payload=opportunity_payload,
+            opportunity_status=opportunity_status,
+        )
+
+    @app.post("/insights/history/rebuild")
+    def insights_history_rebuild_route() -> Any:
+        started = app.history_store.start_or_resume()  # type: ignore[attr-defined]
+        if started:
+            flash("已开始/继续重建历史脉络；系统会在后台读取核心解读并持续保存进度。", "success")
+        else:
+            flash("历史脉络正在生成中，请稍后刷新页面。", "success")
+        return redirect(url_for("insights_index"))
+
+    @app.post("/insights/history/stop")
+    def insights_history_stop_route() -> Any:
+        stopped = app.history_store.request_stop()  # type: ignore[attr-defined]
+        if stopped:
+            flash("已请求停止历史脉络任务；当前阶段完成后会尽快停下。", "success")
+        else:
+            flash("当前没有正在运行的历史脉络任务。", "success")
+        return redirect(url_for("insights_index"))
+
+    @app.get("/insights/history/status")
+    def insights_history_status_route() -> Any:
+        return app.history_store.status_snapshot()  # type: ignore[attr-defined]
+
+    @app.post("/insights/momentum/rebuild")
+    def insights_momentum_rebuild_route() -> Any:
+        started = app.momentum_store.start_or_resume()  # type: ignore[attr-defined]
+        if started:
+            flash("已开始/继续生成 Momentum Radar；系统会在后台读取核心解读并持续保存进度。", "success")
+        else:
+            flash("Momentum Radar 正在生成中，请稍后刷新页面。", "success")
+        return redirect(url_for("insights_index"))
+
+    @app.post("/insights/momentum/stop")
+    def insights_momentum_stop_route() -> Any:
+        stopped = app.momentum_store.request_stop()  # type: ignore[attr-defined]
+        if stopped:
+            flash("已请求停止 Momentum Radar 任务；当前阶段完成后会尽快停下。", "success")
+        else:
+            flash("当前没有正在运行的 Momentum Radar 任务。", "success")
+        return redirect(url_for("insights_index"))
+
+    @app.get("/insights/momentum/status")
+    def insights_momentum_status_route() -> Any:
+        return app.momentum_store.status_snapshot()  # type: ignore[attr-defined]
+
+    @app.post("/insights/opportunity/rebuild")
+    def insights_opportunity_rebuild_route() -> Any:
+        started = app.opportunity_store.start_or_resume()  # type: ignore[attr-defined]
+        if started:
+            flash("已开始/继续生成 Opportunity Map；系统会在后台读取核心解读并持续保存进度。", "success")
+        else:
+            flash("Opportunity Map 正在生成中，请稍后刷新页面。", "success")
+        return redirect(url_for("insights_index"))
+
+    @app.post("/insights/opportunity/stop")
+    def insights_opportunity_stop_route() -> Any:
+        stopped = app.opportunity_store.request_stop()  # type: ignore[attr-defined]
+        if stopped:
+            flash("已请求停止 Opportunity Map 任务；当前阶段完成后会尽快停下。", "success")
+        else:
+            flash("当前没有正在运行的 Opportunity Map 任务。", "success")
+        return redirect(url_for("insights_index"))
+
+    @app.get("/insights/opportunity/status")
+    def insights_opportunity_status_route() -> Any:
+        return app.opportunity_store.status_snapshot()  # type: ignore[attr-defined]
 
     @app.get("/sources/open/<run_date>/<paper_id>")
     def source_pdf_route(run_date: str, paper_id: str) -> Any:

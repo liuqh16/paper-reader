@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paper-reader-insights"
+version = "0.1.0"
+description = "Insight generation layer for the local AutoResearch paper corpus"
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["paper_reader_insights*"]

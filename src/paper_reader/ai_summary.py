@@ -67,24 +67,18 @@ def _progress_from_event(line_index: int, payload: dict[str, object] | None) -> 
     return progress, text[:220]
 
 
-def run_prompt_on_document(
-    document_path: Path,
+def _run_codex_prompt(
+    prompt_text: str,
     *,
-    user_prompt: str,
+    workdir: Path,
     model: str = DEFAULT_MODEL,
     progress_callback: ProgressCallback | None = None,
     should_abort: AbortCallback | None = None,
     process_callback: ProcessCallback | None = None,
 ) -> str:
-    document_path = document_path.resolve()
-    if not document_path.exists() or not document_path.is_file():
-        raise FileNotFoundError(document_path)
-    if document_path.suffix.lower() not in SUPPORTED_SUMMARY_EXTENSIONS:
-        raise UnsupportedDocumentError(f"Unsupported file type for Codex processing: {document_path.suffix}")
     if shutil.which("codex") is None:
         raise RuntimeError("`codex` command is not available in PATH.")
 
-    final_user_prompt = render_user_prompt(user_prompt, document_path)
     if progress_callback:
         progress_callback(5, "正在启动 Codex YOLO 后台任务。")
 
@@ -103,7 +97,7 @@ def run_prompt_on_document(
                     "--skip-git-repo-check",
                     "--dangerously-bypass-approvals-and-sandbox",
                     "--cd",
-                    str(document_path.parent),
+                    str(workdir.resolve()),
                     "--model",
                     model or DEFAULT_MODEL,
                     "--output-last-message",
@@ -126,7 +120,7 @@ def run_prompt_on_document(
                 if process.stdin is None or process.stdout is None:
                     raise RuntimeError("Failed to start Codex process.")
 
-                process.stdin.write(final_user_prompt)
+                process.stdin.write(prompt_text)
                 process.stdin.close()
 
                 last_lines: list[str] = []
@@ -176,6 +170,51 @@ def run_prompt_on_document(
                     process_callback(None)
 
     raise last_error or RuntimeError("Codex execution failed.")
+
+
+def run_text_prompt(
+    prompt_text: str,
+    *,
+    workdir: Path | None = None,
+    model: str = DEFAULT_MODEL,
+    progress_callback: ProgressCallback | None = None,
+    should_abort: AbortCallback | None = None,
+    process_callback: ProcessCallback | None = None,
+) -> str:
+    return _run_codex_prompt(
+        prompt_text,
+        workdir=(workdir or Path.cwd()),
+        model=model,
+        progress_callback=progress_callback,
+        should_abort=should_abort,
+        process_callback=process_callback,
+    )
+
+
+def run_prompt_on_document(
+    document_path: Path,
+    *,
+    user_prompt: str,
+    model: str = DEFAULT_MODEL,
+    progress_callback: ProgressCallback | None = None,
+    should_abort: AbortCallback | None = None,
+    process_callback: ProcessCallback | None = None,
+) -> str:
+    document_path = document_path.resolve()
+    if not document_path.exists() or not document_path.is_file():
+        raise FileNotFoundError(document_path)
+    if document_path.suffix.lower() not in SUPPORTED_SUMMARY_EXTENSIONS:
+        raise UnsupportedDocumentError(f"Unsupported file type for Codex processing: {document_path.suffix}")
+
+    final_user_prompt = render_user_prompt(user_prompt, document_path)
+    return _run_codex_prompt(
+        final_user_prompt,
+        workdir=document_path.parent,
+        model=model,
+        progress_callback=progress_callback,
+        should_abort=should_abort,
+        process_callback=process_callback,
+    )
 
 
 

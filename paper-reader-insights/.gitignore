@@ -1,0 +1,4 @@
+__pycache__/
+output/*.md
+output/*.json
+!output/.gitkeep

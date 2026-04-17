@@ -168,6 +168,281 @@ class PaperReaderAppTests(unittest.TestCase):
         (day_dir / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         return pdf_path
 
+    def create_insights_history_cache(self) -> None:
+        cache_dir = self.library / ".paper-reader-insights"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "generated_at": "2026-04-12T12:00:00",
+            "source_paper_count": 723,
+            "theme_count": 1,
+            "themes": [
+                {
+                    "slug": "agent",
+                    "label": "Agent",
+                    "description": "从工具调用走向长期任务和真实工作流的智能体路线。",
+                    "paper_count": 42,
+                    "start_date": "2023-01-01",
+                    "end_date": "2026-04-10",
+                    "year_counts": [
+                        {"year": "2023", "count": 6},
+                        {"year": "2024", "count": 12},
+                        {"year": "2025", "count": 16},
+                        {"year": "2026", "count": 8},
+                    ],
+                    "history_summary": "Agent 这条线先解决会不会用工具，再转向长期任务、真实环境与记忆管理。",
+                    "why_it_emerged": "因为静态问答式 benchmark 无法解释真实助理为什么会在长期流程里失效。",
+                    "phase_cards": [
+                        {
+                            "phase": "2023",
+                            "label": "工具调用起步",
+                            "summary": "开始证明模型能调工具，但环境仍然很玩具。",
+                            "main_shift": "从单轮回答走向最基础的 action execution。",
+                            "papers": [
+                                {
+                                    "paper_id": "P01",
+                                    "rel_path": "agent-paper.pdf",
+                                    "title": "Agent Paper",
+                                    "sort_date": "2023-01-01",
+                                }
+                            ],
+                        }
+                    ],
+                    "milestones": [
+                        {
+                            "paper_id": "P01",
+                            "title": "Agent Paper",
+                            "sort_date": "2023-01-01",
+                            "role": "foundation",
+                            "why": "它把最早期的 agent workflow 定义了出来。",
+                            "rel_path": "agent-paper.pdf",
+                        },
+                        {
+                            "paper_id": "P02",
+                            "title": "ClawArena",
+                            "sort_date": "2026-04-01",
+                            "role": "turning_point",
+                            "why": "它把评测重点推进到长期环境、动态更新和信念修正。",
+                            "rel_path": "clawarena.pdf",
+                        },
+                    ],
+                    "paradigm_shifts": ["从工具调用走向长期任务", "从静态 benchmark 走向真实环境"],
+                    "mainstreaming": ["记忆与验证成为标准配件"],
+                    "representative_papers": [],
+                    "llm_used": True,
+                }
+            ],
+        }
+        status = {
+            "state": "ready",
+            "stage": "complete",
+            "updated_at": "2026-04-12T12:00:00",
+            "started_at": "2026-04-12T11:58:00",
+            "error": None,
+            "message": "历史脉络已生成。",
+            "progress": 100,
+            "current_theme_index": 1,
+            "current_theme_slug": "agent",
+            "current_theme_label": "Agent",
+            "completed_themes": 1,
+            "total_themes": 1,
+            "scanned_core_papers": 723,
+            "total_core_papers": 723,
+            "stop_requested": False,
+        }
+        (cache_dir / "history_timeline.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        (cache_dir / "history_status.json").write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def create_momentum_cache(self) -> None:
+        cache_dir = self.library / ".paper-reader-insights"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "generated_at": "2026-04-12T12:30:00",
+            "anchor_date": "2026-04-12",
+            "source_paper_count": 723,
+            "window_count": 3,
+            "windows": [
+                {
+                    "days": 30,
+                    "label": "过去 30 天",
+                    "anchor_date": "2026-04-12",
+                    "start_date": "2026-03-14",
+                    "paper_count": 18,
+                    "previous_paper_count": 9,
+                    "summary": "最近 30 天里，Agent 和真实环境评测是最明显的升温带。",
+                    "hot_topics": [
+                        {
+                            "name": "Agent",
+                            "count": 8,
+                            "previous_count": 3,
+                            "momentum_score": 23.4,
+                            "why": "Agent 话题在最近窗口里明显加速，且更多论文开始把长期任务和真实工作流放进同一个叙事里。",
+                            "papers": [
+                                {
+                                    "paper_id": "",
+                                    "rel_path": "agent-paper.pdf",
+                                    "title": "Agent Paper",
+                                    "sort_date": "2026-04-01",
+                                    "summary": "Agent summary",
+                                    "methods": [],
+                                    "signals": [],
+                                }
+                            ],
+                        }
+                    ],
+                    "method_routes": [
+                        {
+                            "name": "Verification/Executable Checks",
+                            "count": 6,
+                            "previous_count": 2,
+                            "momentum_score": 18.0,
+                            "why": "越来越多论文开始把 verifier 和 executable checks 当作默认配件。",
+                            "papers": [],
+                        }
+                    ],
+                    "benchmark_focus": [
+                        {
+                            "name": "Workspace/Real-World Eval",
+                            "count": 5,
+                            "previous_count": 1,
+                            "momentum_score": 17.0,
+                            "why": "评测焦点开始从静态问答转向真实环境和 workspace 任务。",
+                            "papers": [],
+                        }
+                    ],
+                    "emerging_edges": [
+                        {
+                            "name": "World Model/Simulation",
+                            "kind": "topic",
+                            "count": 2,
+                            "previous_count": 0,
+                            "lifetime_count": 4,
+                            "momentum_score": 14.0,
+                            "why": "虽然总体样本还少，但最近窗口里世界模型与模拟器方向开始连续出现。",
+                            "papers": [],
+                        }
+                    ],
+                    "llm_used": True,
+                }
+            ],
+        }
+        status = {
+            "state": "ready",
+            "stage": "complete",
+            "updated_at": "2026-04-12T12:30:00",
+            "started_at": "2026-04-12T12:20:00",
+            "error": None,
+            "message": "Momentum Radar 已生成。",
+            "progress": 100,
+            "completed_windows": 3,
+            "total_windows": 3,
+            "current_window_days": 90,
+            "current_window_label": "过去 90 天",
+            "scanned_core_papers": 723,
+            "total_core_papers": 723,
+            "stop_requested": False,
+        }
+        (cache_dir / "momentum_dashboard.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        (cache_dir / "momentum_status.json").write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def create_opportunity_cache(self) -> None:
+        cache_dir = self.library / ".paper-reader-insights"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "generated_at": "2026-04-12T13:00:00",
+            "anchor_date": "2026-04-12",
+            "source_paper_count": 723,
+            "section_count": 2,
+            "history_theme_count": 6,
+            "momentum_window_count": 3,
+            "sections": [
+                {
+                    "slug": "unresolved_problems",
+                    "label": "未解问题",
+                    "description": "哪些问题被不断提起，但到今天仍没有被真正解决。",
+                    "summary": "当前最值得继续打的未解问题集中在 Agent 方向里的长期任务稳定性与真实闭环。",
+                    "candidate_count": 3,
+                    "item_count": 1,
+                    "anchor_date": "2026-04-12",
+                    "llm_used": True,
+                    "items": [
+                        {
+                            "key": "unresolved-agent",
+                            "title": "Agent 方向里的关键未解问题",
+                            "stats_line": "历史累计 42 篇；最近 90 天 8 篇",
+                            "why": "长期任务里的稳定反馈闭环仍然没有被真正解决，所以这条线虽然热，但问题还远没收敛。",
+                            "evidence": "历史上 Agent 一直在强调真实工作流，而最近 momentum 里它又持续升温，说明旧问题还在。",
+                            "next_bet": "把长期任务里的 verifier、memory 和环境反馈做成一个真正可比较的实验闭环。",
+                            "papers": [
+                                {
+                                    "paper_id": "",
+                                    "rel_path": "agent-paper.pdf",
+                                    "title": "Agent Paper",
+                                    "sort_date": "2026-04-01",
+                                    "summary": "Agent summary",
+                                    "methods": [],
+                                    "signals": [],
+                                }
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "slug": "transfer_gaps",
+                    "label": "可迁移的方法空白",
+                    "description": "哪些不同领域之间存在方法可迁移但尚未迁移的空白。",
+                    "summary": "当前最值得注意的迁移空白，是把 Verification/Executable Checks 更系统地带进 Memory 方向。",
+                    "candidate_count": 2,
+                    "item_count": 1,
+                    "anchor_date": "2026-04-12",
+                    "llm_used": True,
+                    "items": [
+                        {
+                            "key": "transfer-verification-memory",
+                            "title": "把 Verification/Executable Checks 迁移到 Memory",
+                            "stats_line": "方法累计 12 篇；Memory 累计 9 篇；当前组合仅 1 篇",
+                            "why": "verification 在 agent 和 benchmark 里已经变成标配，但在 memory 这条线上还没有被系统迁移。",
+                            "evidence": "Memory 最近仍在升温，可是可执行验证的渗透率很低。",
+                            "next_bet": "设计能直接验证 memory update / retrieval / corruption 的 executable checks。",
+                            "papers": [],
+                        }
+                    ],
+                },
+            ],
+        }
+        status = {
+            "state": "ready",
+            "stage": "complete",
+            "updated_at": "2026-04-12T13:00:00",
+            "started_at": "2026-04-12T12:50:00",
+            "error": None,
+            "message": "Opportunity Map 已生成。",
+            "progress": 100,
+            "completed_sections": 5,
+            "total_sections": 5,
+            "current_section_slug": "transfer_gaps",
+            "current_section_label": "可迁移的方法空白",
+            "scanned_core_papers": 723,
+            "total_core_papers": 723,
+            "stop_requested": False,
+        }
+        (cache_dir / "opportunity_map.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        (cache_dir / "opportunity_status.json").write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def write_insights_status(self, payload: dict[str, object]) -> None:
+        cache_dir = self.library / ".paper-reader-insights"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / "history_status.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def write_momentum_status(self, payload: dict[str, object]) -> None:
+        cache_dir = self.library / ".paper-reader-insights"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / "momentum_status.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def write_opportunity_status(self, payload: dict[str, object]) -> None:
+        cache_dir = self.library / ".paper-reader-insights"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / "opportunity_status.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
     def test_login_required_for_index(self) -> None:
         client = self.app.test_client()
         response = client.get("/", follow_redirects=False)
@@ -1911,6 +2186,252 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("查看来源归档", html)
         self.assertIn("/sources", html)
+        self.assertIn("打开 Insights 页面", html)
+        self.assertIn("/insights", html)
+
+    def test_insights_page_renders_history_visualization(self) -> None:
+        self.create_insights_history_cache()
+        self.create_momentum_cache()
+        self.create_opportunity_cache()
+
+        response = self.client.get("/insights")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("历史脉络", html)
+        self.assertIn("Agent", html)
+        self.assertIn("工具调用起步", html)
+        self.assertIn("ClawArena", html)
+        self.assertIn("重新生成", html)
+        self.assertIn("核心解读扫描：723/723 篇", html)
+        self.assertIn("Trend Radar", html)
+        self.assertIn("Workspace/Real-World Eval", html)
+        self.assertIn("World Model/Simulation", html)
+        self.assertIn("Opportunity Map", html)
+        self.assertIn("Agent 方向里的关键未解问题", html)
+        self.assertIn("把 Verification/Executable Checks 迁移到 Memory", html)
+
+    def test_insights_rebuild_route_starts_background_generation(self) -> None:
+        with patch.object(self.app.history_store, "start_or_resume", return_value=True) as mocked:
+            response = self.client.post("/insights/history/rebuild", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/insights", response.headers["Location"])
+        mocked.assert_called_once_with()
+
+    def test_insights_page_shows_continue_for_stopped_history_job(self) -> None:
+        self.create_insights_history_cache()
+        self.write_insights_status(
+            {
+                "state": "stopped",
+                "stage": "stopped",
+                "updated_at": "2026-04-12T12:10:00",
+                "started_at": "2026-04-12T11:58:00",
+                "error": None,
+                "message": "历史脉络任务已停止，可稍后继续。",
+                "progress": 64,
+                "current_theme_index": 1,
+                "current_theme_slug": "agent",
+                "current_theme_label": "Agent",
+                "completed_themes": 1,
+                "total_themes": 3,
+                "scanned_core_papers": 412,
+                "total_core_papers": 723,
+                "stop_requested": False,
+            }
+        )
+
+        response = self.client.get("/insights")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("历史脉络生成已暂停", html)
+        self.assertIn(">继续<", html)
+        self.assertIn("64%", html)
+        self.assertIn("核心解读扫描：412/723 篇", html)
+
+    def test_insights_status_marks_stale_running_job_as_stopped(self) -> None:
+        self.write_insights_status(
+            {
+                "state": "running",
+                "stage": "theme_generation",
+                "updated_at": "2026-04-12T12:05:00",
+                "started_at": "2026-04-12T11:58:00",
+                "error": None,
+                "message": "正在生成第 2/3 条历史主线：Agent",
+                "progress": 57,
+                "current_theme_index": 2,
+                "current_theme_slug": "agent",
+                "current_theme_label": "Agent",
+                "completed_themes": 1,
+                "total_themes": 3,
+                "scanned_core_papers": 301,
+                "total_core_papers": 723,
+                "stop_requested": False,
+            }
+        )
+
+        snapshot = self.app.history_store.status_snapshot()
+
+        self.assertEqual(snapshot["state"], "stopped")
+        self.assertTrue(snapshot["can_continue"])
+        self.assertFalse(snapshot["can_stop"])
+        self.assertEqual(snapshot["scanned_core_papers"], 301)
+        self.assertEqual(snapshot["total_core_papers"], 723)
+
+    def test_insights_stop_route_requests_background_stop(self) -> None:
+        with patch.object(self.app.history_store, "request_stop", return_value=True) as mocked:
+            response = self.client.post("/insights/history/stop", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/insights", response.headers["Location"])
+        mocked.assert_called_once_with()
+
+    def test_momentum_rebuild_route_starts_background_generation(self) -> None:
+        with patch.object(self.app.momentum_store, "start_or_resume", return_value=True) as mocked:
+            response = self.client.post("/insights/momentum/rebuild", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/insights", response.headers["Location"])
+        mocked.assert_called_once_with()
+
+    def test_momentum_stop_route_requests_background_stop(self) -> None:
+        with patch.object(self.app.momentum_store, "request_stop", return_value=True) as mocked:
+            response = self.client.post("/insights/momentum/stop", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/insights", response.headers["Location"])
+        mocked.assert_called_once_with()
+
+    def test_insights_page_shows_continue_for_stopped_momentum_job(self) -> None:
+        self.create_momentum_cache()
+        self.write_momentum_status(
+            {
+                "state": "stopped",
+                "stage": "stopped",
+                "updated_at": "2026-04-12T12:36:00",
+                "started_at": "2026-04-12T12:20:00",
+                "error": None,
+                "message": "Momentum Radar 任务已停止，可稍后继续。",
+                "progress": 58,
+                "completed_windows": 1,
+                "total_windows": 3,
+                "current_window_days": 60,
+                "current_window_label": "过去 60 天",
+                "scanned_core_papers": 512,
+                "total_core_papers": 723,
+                "stop_requested": False,
+            }
+        )
+
+        response = self.client.get("/insights")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Momentum Radar 生成已暂停", html)
+        self.assertIn("研究热区窗口：1/3 个", html)
+        self.assertIn("核心解读扫描：512/723 篇", html)
+
+    def test_momentum_status_marks_stale_running_job_as_stopped(self) -> None:
+        self.write_momentum_status(
+            {
+                "state": "running",
+                "stage": "window_generation",
+                "updated_at": "2026-04-12T12:35:00",
+                "started_at": "2026-04-12T12:20:00",
+                "error": None,
+                "message": "正在生成过去 60 天的 Momentum Radar。",
+                "progress": 61,
+                "completed_windows": 1,
+                "total_windows": 3,
+                "current_window_days": 60,
+                "current_window_label": "过去 60 天",
+                "scanned_core_papers": 480,
+                "total_core_papers": 723,
+                "stop_requested": False,
+            }
+        )
+
+        snapshot = self.app.momentum_store.status_snapshot()
+
+        self.assertEqual(snapshot["state"], "stopped")
+        self.assertTrue(snapshot["can_continue"])
+        self.assertFalse(snapshot["can_stop"])
+        self.assertEqual(snapshot["scanned_core_papers"], 480)
+        self.assertEqual(snapshot["total_core_papers"], 723)
+
+    def test_opportunity_rebuild_route_starts_background_generation(self) -> None:
+        with patch.object(self.app.opportunity_store, "start_or_resume", return_value=True) as mocked:
+            response = self.client.post("/insights/opportunity/rebuild", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/insights", response.headers["Location"])
+        mocked.assert_called_once_with()
+
+    def test_opportunity_stop_route_requests_background_stop(self) -> None:
+        with patch.object(self.app.opportunity_store, "request_stop", return_value=True) as mocked:
+            response = self.client.post("/insights/opportunity/stop", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/insights", response.headers["Location"])
+        mocked.assert_called_once_with()
+
+    def test_insights_page_shows_continue_for_stopped_opportunity_job(self) -> None:
+        self.create_opportunity_cache()
+        self.write_opportunity_status(
+            {
+                "state": "stopped",
+                "stage": "stopped",
+                "updated_at": "2026-04-12T13:06:00",
+                "started_at": "2026-04-12T12:50:00",
+                "error": None,
+                "message": "Opportunity Map 任务已停止，可稍后继续。",
+                "progress": 72,
+                "completed_sections": 3,
+                "total_sections": 5,
+                "current_section_slug": "crowded_spaces",
+                "current_section_label": "开始拥挤的方向",
+                "scanned_core_papers": 620,
+                "total_core_papers": 723,
+                "stop_requested": False,
+            }
+        )
+
+        response = self.client.get("/insights")
+        html = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Opportunity Map 生成已暂停", html)
+        self.assertIn("机会模块：3/5 个", html)
+        self.assertIn("核心解读扫描：620/723 篇", html)
+
+    def test_opportunity_status_marks_stale_running_job_as_stopped(self) -> None:
+        self.write_opportunity_status(
+            {
+                "state": "running",
+                "stage": "section_generation",
+                "updated_at": "2026-04-12T13:04:00",
+                "started_at": "2026-04-12T12:50:00",
+                "error": None,
+                "message": "正在生成机会模块：高回报低密度",
+                "progress": 66,
+                "completed_sections": 2,
+                "total_sections": 5,
+                "current_section_slug": "high_upside_edges",
+                "current_section_label": "高回报低密度",
+                "scanned_core_papers": 540,
+                "total_core_papers": 723,
+                "stop_requested": False,
+            }
+        )
+
+        snapshot = self.app.opportunity_store.status_snapshot()
+
+        self.assertEqual(snapshot["state"], "stopped")
+        self.assertTrue(snapshot["can_continue"])
+        self.assertFalse(snapshot["can_stop"])
+        self.assertEqual(snapshot["scanned_core_papers"], 540)
+        self.assertEqual(snapshot["total_core_papers"], 723)
 
     def test_sources_page_lists_archived_day_and_paper(self) -> None:
         self.create_source_day("2026-04-11", paper_id="2604.08377", title="SkillClaw")
