@@ -12,7 +12,7 @@ import time
 from urllib.parse import unquote, urlparse
 from urllib.request import Request, urlopen
 import zipfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -1448,6 +1448,15 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             "member_submission_folder": default_member_submission_folder(user),
         }
 
+    def user_done_rel_paths(user_id: int | None = None) -> set[str]:
+        return app.team_store.done_rel_paths_for_user(user_id if user_id is not None else current_user_id())  # type: ignore[attr-defined]
+
+    def apply_user_done_state(papers: list[PaperRecord], *, user_id: int | None = None) -> list[PaperRecord]:
+        done_rel_paths = user_done_rel_paths(user_id)
+        if not done_rel_paths:
+            return [replace(paper, is_done=False) for paper in papers]
+        return [replace(paper, is_done=(paper.rel_path in done_rel_paths)) for paper in papers]
+
     @app.before_request
     def require_login() -> Any:
         endpoint = request.endpoint or ""
@@ -1849,6 +1858,35 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 generated_at=generated_at,
             )
 
+    def migrate_legacy_done_documents() -> int:
+        legacy_documents = app.library.iter_done_documents()  # type: ignore[attr-defined]
+        if not legacy_documents:
+            return 0
+
+        active_prompt_slugs = [prompt.slug for prompt in app.prompt_store.active_prompts()]  # type: ignore[attr-defined]
+        all_prompts = app.prompt_store.list_prompts()  # type: ignore[attr-defined]
+        migrated_records: list[PaperRecord] = []
+        for path in legacy_documents:
+            old_rel_path = path.relative_to(app.library.root).as_posix()  # type: ignore[attr-defined]
+            destination = app.library.restore_destination_for(old_rel_path)  # type: ignore[attr-defined]
+            path.rename(destination)
+            new_rel_path = destination.relative_to(app.library.root).as_posix()  # type: ignore[attr-defined]
+            app.library._move_prompt_results(old_rel_path, new_rel_path)  # type: ignore[attr-defined]
+            cached = app.library._hash_cache.pop(old_rel_path, None)  # type: ignore[attr-defined]
+            if cached:
+                app.library._hash_cache[new_rel_path] = cached  # type: ignore[attr-defined]
+
+            moved_paper = app.library.build_record_for_rel_path(new_rel_path, active_prompt_slugs)  # type: ignore[attr-defined]
+            app.team_store.rename_paper(old_rel_path, moved_paper)  # type: ignore[attr-defined]
+            app.team_store.sync_papers([moved_paper])  # type: ignore[attr-defined]
+            app.team_store.mark_done_for_all_users(new_rel_path)  # type: ignore[attr-defined]
+            ensure_prompt_run_metadata(moved_paper, all_prompts)
+            migrated_records.append(moved_paper)
+
+        app.library.rebuild_active_index(lightweight=True)  # type: ignore[attr-defined]
+        app.library.rebuild_done_index(lightweight=True)  # type: ignore[attr-defined]
+        return len(migrated_records)
+
     def load_chat_prompt_contexts(rel_path: str, prompts: list[PromptDefinition]) -> list[tuple[str, str]]:
         contexts: list[tuple[str, str]] = []
         for prompt in prompts:
@@ -1881,6 +1919,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         team_store=app.team_store,
         prompt_context_loader=load_chat_prompt_contexts,
     )
+    migrate_legacy_done_documents()
 
     def build_batch_papers(
         *,
@@ -1891,12 +1930,12 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         batch_show_done: bool,
         selected_rel_path: str = "",
     ) -> list[PaperRecord]:
-        include_done = show_done or batch_show_done or selected_rel_path.startswith(f"{DONE_DIR_NAME}/")
-        scan = app.library.scan(include_done=include_done)  # type: ignore[attr-defined]
+        scan = app.library.scan()  # type: ignore[attr-defined]
         app.team_store.sync_papers(scan.papers)  # type: ignore[attr-defined]
+        papers = apply_user_done_state(scan.papers)
         metadata_matches = app.team_store.search_rel_paths(query) if query.strip() else set()  # type: ignore[attr-defined]
         batch_papers = filter_and_sort_papers(
-            scan.papers,
+            papers,
             folder=folder,
             query=query,
             sort_by=sort_by,
@@ -1917,15 +1956,15 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         selected_rel_path = request.args.get("paper", "").strip("/")
         selected_tab = request.args.get("tab", "source")
 
-        include_done = show_done or batch_show_done or selected_rel_path.startswith(f"{DONE_DIR_NAME}/")
-        scan = app.library.scan(include_done=include_done)  # type: ignore[attr-defined]
+        scan = app.library.scan()  # type: ignore[attr-defined]
         app.team_store.sync_papers(scan.papers)  # type: ignore[attr-defined]
+        papers_with_user_state = apply_user_done_state(scan.papers)
         all_prompts = app.prompt_store.list_prompts()  # type: ignore[attr-defined]
         active_prompts = [prompt for prompt in all_prompts if prompt.enabled]
         metadata_matches = app.team_store.search_rel_paths(query) if query.strip() else set()  # type: ignore[attr-defined]
 
         papers = filter_and_sort_papers(
-            scan.papers,
+            papers_with_user_state,
             folder=folder,
             query=query,
             sort_by=sort_by,
@@ -1933,7 +1972,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             metadata_matches=metadata_matches,
         )
         batch_papers = filter_and_sort_papers(
-            scan.papers,
+            papers_with_user_state,
             folder=folder,
             query=query,
             sort_by=sort_by,
@@ -1943,7 +1982,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         if not batch_show_done:
             batch_papers = [paper for paper in batch_papers if not paper.is_done]
         batch_library_papers = filter_and_sort_papers(
-            scan.papers,
+            papers_with_user_state,
             folder="",
             query="",
             sort_by=sort_by,
@@ -2061,7 +2100,10 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             selected_tab = "source"
 
         recommendation_feed = []
-        for item in app.team_store.recent_recommendation_feed(limit=5, window_days=14):  # type: ignore[attr-defined]
+        excluded_rel_paths = set() if show_done else user_done_rel_paths()
+        for item in app.team_store.recent_recommendation_feed(limit=12, window_days=14):  # type: ignore[attr-defined]
+            if item["rel_path"] in excluded_rel_paths:
+                continue
             paper_url_params: dict[str, Any] = {
                 "folder": folder,
                 "q": query,
@@ -2077,6 +2119,8 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                     "paper_url": url_for("index", **paper_url_params),
                 }
             )
+            if len(recommendation_feed) >= 5:
+                break
 
         return render_template(
             "index.html",
@@ -2336,29 +2380,23 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         show_done = parse_checkbox(request.form.get("show_done"))
         rel_path = request.form.get("rel_path", "").strip("/")
         tab = request.form.get("tab", "source")
+        actor = current_user()
+        if actor is None:
+            flash("请先登录。", "error")
+            return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
         try:
-            new_rel_path = app.library.toggle_done(rel_path)  # type: ignore[attr-defined]
-            active_prompt_slugs = [prompt.slug for prompt in app.prompt_store.active_prompts()]  # type: ignore[attr-defined]
-            moved_paper = app.library.build_record_for_rel_path(new_rel_path, active_prompt_slugs)  # type: ignore[attr-defined]
-            app.team_store.rename_paper(rel_path, moved_paper)  # type: ignore[attr-defined]
-            moved_to_done = app.library.is_done_rel_path(new_rel_path)  # type: ignore[attr-defined]
-            flash("这篇论文已经放进 DONE。" if moved_to_done else "这篇论文已经移回待处理列表。", "success")
-            selected_rel_path = new_rel_path if show_done else None
-            next_show_done = show_done
-            next_folder = current_folder
-            if next_folder and not (
-                Path(new_rel_path).parent.as_posix() == next_folder
-                or new_rel_path.startswith(next_folder + "/")
-            ):
-                next_folder = ""
+            ensure_paper_metadata(rel_path)
+            is_done = app.team_store.toggle_done_state(rel_path, actor.id)  # type: ignore[attr-defined]
+            flash("这篇论文已经标记为已读。" if is_done else "这篇论文已经恢复为未读。", "success")
+            selected_rel_path = rel_path if (show_done or not is_done) else None
             next_tab = tab if selected_rel_path else "source"
             return redirect_to_index(
-                next_folder,
+                current_folder,
                 query,
                 sort_by,
                 selected_rel_path,
                 next_tab,
-                show_done=next_show_done,
+                show_done=show_done,
             )
         except (FileNotFoundError, ValueError) as exc:
             flash(str(exc), "error")
@@ -2854,7 +2892,8 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
 
         scan = app.library.scan()  # type: ignore[attr-defined]
-        paper_map = {paper.rel_path: paper for paper in scan.papers}
+        app.team_store.sync_papers(scan.papers)  # type: ignore[attr-defined]
+        paper_map = {paper.rel_path: paper for paper in apply_user_done_state(scan.papers)}  # type: ignore[attr-defined]
         selected_records: list[PaperRecord] = []
         for rel_path in rel_paths:
             paper = paper_map.get(rel_path)
@@ -3079,10 +3118,12 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         admin_user = require_admin_user()
         if admin_user is None:
             return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
+        migrated_done_count = migrate_legacy_done_documents()
         active_records = app.library.rebuild_active_index(lightweight=True)  # type: ignore[attr-defined]
         done_records = app.library.rebuild_done_index(lightweight=True)  # type: ignore[attr-defined]
+        migration_note = f"；另外还迁移了 {migrated_done_count} 篇旧版 DONE 论文到个人已读状态" if migrated_done_count else ""
         flash(
-            f"论文列表已经快速同步：普通目录 {len(active_records)} 篇，DONE {len(done_records)} 篇；这次没有重新跑分析。",
+            f"论文列表已经快速同步：普通目录 {len(active_records)} 篇，旧版 DONE 目录 {len(done_records)} 篇{migration_note}；这次没有重新跑分析。",
             "success",
         )
         return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)

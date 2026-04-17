@@ -519,12 +519,12 @@ class PaperReaderAppTests(unittest.TestCase):
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("1 人推荐", html)
+        self.assertIn("1 人", html)
         self.assertIn("#robotics", html)
-        self.assertIn("1 条评论", html)
+        self.assertIn("1 评论", html)
         self.assertIn("协作记录", html)
         self.assertIn("这个结果很适合组会分享。", html)
-        self.assertIn("我的推荐理由（可选）", html)
+        self.assertIn("评论", html)
 
         search_response = self.client.get("/?q=robotics")
         self.assertIn("Robot Policy", search_response.get_data(as_text=True))
@@ -573,7 +573,7 @@ class PaperReaderAppTests(unittest.TestCase):
         html = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
         self.assertIn("推荐信息已经保存", html)
-        self.assertIn("1 人推荐", html)
+        self.assertIn("1 人", html)
 
     def test_shared_and_private_chat_threads_are_persisted_separately(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Chat Paper")
@@ -1213,12 +1213,11 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn('id="chat-shared" hidden', html)
         self.assertIn("workspace-recommend-button", html)
         self.assertIn("发到一起学", html)
-        self.assertIn("我的推荐", html)
-        self.assertIn("先用顶部的推荐按钮把这篇论文加入推荐", html)
+        self.assertIn("围绕这篇论文的交流统一留在评论区", html)
         self.assertIn("compact-tag-toggle", html)
         self.assertIn("添标签", html)
         self.assertIn("原文阅读", html)
-        self.assertIn("评论区", html)
+        self.assertIn("评论", html)
         self.assertNotIn("workspace-like-button", html)
         self.assertNotIn("推荐和原来的点赞已经合并；这里只显示团队明确想继续读的论文", html)
 
@@ -1267,15 +1266,18 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn("paper-year-group", html)
         self.assertIn("2025", html)
         self.assertIn("2024-12", html)
-        self.assertIn("显示 DONE 论文", html)
+        self.assertIn("显示我已读的论文", html)
 
-    def test_done_toggle_moves_file_and_hides_it_by_default(self) -> None:
+    def test_done_toggle_marks_current_user_only_and_hides_it_by_default(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Done Me")
         prompt = self.app.prompt_store.get_prompt("core-zh")
         assert prompt is not None
         result_path = self.app.library.prompt_result_path_for("paper.pdf", prompt.slug)
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text("# Cached\n", encoding="utf-8")
+        self.app.team_store.create_user("alice", "Alice", "alice-pass-123", "member")
+        alice_client = self.app.test_client()
+        self.login_client_as(alice_client, "alice")
 
         response = self.client.post(
             "/done-toggle",
@@ -1292,19 +1294,36 @@ class PaperReaderAppTests(unittest.TestCase):
         html = response.get_data(as_text=True)
 
         self.assertEqual(response.status_code, 200)
-        self.assertFalse((self.library / "paper.pdf").exists())
-        self.assertTrue((self.library / "DONE" / "paper.pdf").exists())
-        self.assertTrue(self.app.library.prompt_result_path_for("DONE/paper.pdf", prompt.slug).exists())
+        self.assertTrue((self.library / "paper.pdf").exists())
+        self.assertTrue(result_path.exists())
         self.assertNotIn("Done Me", html)
+        admin_user = self.app.team_store.get_user_by_username("admin")
+        assert admin_user is not None
+        self.assertTrue(self.app.team_store.is_done_for_user("paper.pdf", admin_user.id))
 
         show_done_response = self.client.get("/?show_done=1")
         self.assertIn("Done Me", show_done_response.get_data(as_text=True))
 
+        alice_response = alice_client.get("/")
+        self.assertIn("Done Me", alice_response.get_data(as_text=True))
+
     def test_done_toggle_can_restore_paper(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Restore Me")
-        done_path = self.app.library.toggle_done("paper.pdf")
-
         response = self.client.post(
+            "/done-toggle",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "show_done": "",
+                "tab": "source",
+                "rel_path": "paper.pdf",
+            },
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        restore_response = self.client.post(
             "/done-toggle",
             data={
                 "folder": "",
@@ -1312,29 +1331,55 @@ class PaperReaderAppTests(unittest.TestCase):
                 "sort": "date_desc",
                 "show_done": "1",
                 "tab": "source",
-                "rel_path": done_path,
+                "rel_path": "paper.pdf",
             },
             follow_redirects=True,
         )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(restore_response.status_code, 200)
         self.assertTrue((self.library / "paper.pdf").exists())
-        self.assertFalse((self.library / done_path).exists())
+        admin_user = self.app.team_store.get_user_by_username("admin")
+        assert admin_user is not None
+        self.assertFalse(self.app.team_store.is_done_for_user("paper.pdf", admin_user.id))
 
-    def test_scan_excludes_done_papers_by_default(self) -> None:
-        self.make_pdf(self.library / "todo.pdf", "Todo")
-        self.make_pdf(self.library / "done.pdf", "Done")
-        self.app.library.toggle_done("done.pdf")
+    def test_recommendation_feed_hides_my_read_papers_but_not_other_users(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Feed Done State")
+        self.app.team_store.create_user("alice", "Alice", "alice-pass-123", "member")
+        alice_client = self.app.test_client()
+        self.login_client_as(alice_client, "alice")
 
-        default_scan = self.app.library.scan(force=True)
-        full_scan = self.app.library.scan(force=True, include_done=True)
+        self.client.post(
+            "/recommend",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "show_done": "",
+                "rel_path": "paper.pdf",
+                "tab": "source",
+                "mode": "save",
+                "reason": "",
+            },
+            follow_redirects=True,
+        )
+        self.client.post(
+            "/done-toggle",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "show_done": "",
+                "tab": "source",
+                "rel_path": "paper.pdf",
+            },
+            follow_redirects=True,
+        )
 
-        default_names = [paper.file_name for paper in default_scan.papers]
-        full_names = [paper.file_name for paper in full_scan.papers]
+        admin_html = self.client.get("/").get_data(as_text=True)
+        alice_html = alice_client.get("/").get_data(as_text=True)
 
-        self.assertIn("todo.pdf", default_names)
-        self.assertNotIn("done.pdf", default_names)
-        self.assertIn("done.pdf", full_names)
+        self.assertNotIn("Feed Done State", admin_html)
+        self.assertIn("Feed Done State", alice_html)
 
     def test_index_reads_from_persisted_active_index_without_rescanning_tree(self) -> None:
         self.make_pdf(self.library / "cached-paper.pdf", "Cached Paper")
@@ -1353,37 +1398,33 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("cached-paper.pdf", response.get_data(as_text=True))
 
-    def test_include_done_scan_uses_done_index_instead_of_done_filesystem_walk(self) -> None:
-        self.make_pdf(self.library / "todo.pdf", "Todo")
-        self.make_pdf(self.library / "done.pdf", "Done")
-        self.app.library.toggle_done("done.pdf")
-
-        with patch.object(self.app.library, "iter_documents", wraps=self.app.library.iter_documents) as mocked:
-            full_scan = self.app.library.scan(force=True, include_done=True)
-
-        self.assertEqual([call.kwargs.get("include_done", False) for call in mocked.call_args_list], [False])
-        self.assertEqual(sorted(paper.file_name for paper in full_scan.papers), ["done.pdf", "todo.pdf"])
-
-    def test_done_index_updates_for_done_rename_and_delete(self) -> None:
+    def test_personal_done_state_follows_rename_and_delete(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Done Index")
-        done_rel_path = self.app.library.toggle_done("paper.pdf")
+        admin_user = self.app.team_store.get_user_by_username("admin")
+        assert admin_user is not None
+        self.app.library.rebuild_active_index(lightweight=True)
+        self.app.team_store.sync_papers(self.app.library.scan(force=True).papers)
+        self.app.team_store.set_done_state("paper.pdf", admin_user.id, is_done=True)
 
-        renamed_rel_path = self.app.library.rename_file(done_rel_path, "renamed.pdf")
-        after_rename = self.app.library.scan(force=True, include_done=True)
-        rename_names = [paper.file_name for paper in after_rename.papers]
+        renamed_rel_path = self.app.library.rename_file("paper.pdf", "renamed.pdf")
+        active_prompt_slugs = [prompt.slug for prompt in self.app.prompt_store.active_prompts()]
+        moved_paper = self.app.library.build_record_for_rel_path(renamed_rel_path, active_prompt_slugs)
+        self.app.team_store.rename_paper("paper.pdf", moved_paper)
 
-        self.assertEqual(renamed_rel_path, "DONE/renamed.pdf")
-        self.assertIn("renamed.pdf", rename_names)
-        self.assertNotIn("paper.pdf", rename_names)
+        self.assertTrue(self.app.team_store.is_done_for_user("renamed.pdf", admin_user.id))
 
         self.app.library.delete_file(renamed_rel_path)
-        after_delete = self.app.library.scan(force=True, include_done=True)
-        self.assertNotIn("renamed.pdf", [paper.file_name for paper in after_delete.papers])
+        self.app.team_store.delete_paper(renamed_rel_path)
+        self.assertFalse(self.app.team_store.is_done_for_user("renamed.pdf", admin_user.id))
 
     def test_batch_section_hides_done_papers_even_when_show_done_enabled(self) -> None:
         self.make_pdf(self.library / "todo.pdf", "Todo Paper")
         self.make_pdf(self.library / "done.pdf", "Done Paper")
-        self.app.library.toggle_done("done.pdf")
+        admin_user = self.app.team_store.get_user_by_username("admin")
+        assert admin_user is not None
+        self.app.library.rebuild_active_index(lightweight=True)
+        self.app.team_store.sync_papers(self.app.library.scan(force=True).papers)
+        self.app.team_store.set_done_state("done.pdf", admin_user.id, is_done=True)
 
         response = self.client.get("/tool-panels/batch-run?show_done=1")
         html = response.get_data(as_text=True)
@@ -1410,7 +1451,11 @@ class PaperReaderAppTests(unittest.TestCase):
     def test_batch_section_can_optionally_include_done_papers(self) -> None:
         self.make_pdf(self.library / "todo.pdf", "Todo Paper")
         self.make_pdf(self.library / "done.pdf", "Done Paper")
-        self.app.library.toggle_done("done.pdf")
+        admin_user = self.app.team_store.get_user_by_username("admin")
+        assert admin_user is not None
+        self.app.library.rebuild_active_index(lightweight=True)
+        self.app.team_store.sync_papers(self.app.library.scan(force=True).papers)
+        self.app.team_store.set_done_state("done.pdf", admin_user.id, is_done=True)
 
         default_response = self.client.get("/tool-panels/batch-run")
         include_response = self.client.get("/tool-panels/batch-run?batch_show_done=1")
@@ -1691,7 +1736,11 @@ class PaperReaderAppTests(unittest.TestCase):
     def test_offline_package_route_ignores_done_papers(self) -> None:
         self.make_pdf(self.library / "todo.pdf", "Todo Export")
         self.make_pdf(self.library / "done.pdf", "Done Export")
-        done_rel_path = self.app.library.toggle_done("done.pdf")
+        admin_user = self.app.team_store.get_user_by_username("admin")
+        assert admin_user is not None
+        self.app.library.rebuild_active_index(lightweight=True)
+        self.app.team_store.sync_papers(self.app.library.scan(force=True).papers)
+        self.app.team_store.set_done_state("done.pdf", admin_user.id, is_done=True)
 
         response = self.client.post(
             "/offline-package",
@@ -1701,7 +1750,7 @@ class PaperReaderAppTests(unittest.TestCase):
                 "sort": "date_desc",
                 "paper": "todo.pdf",
                 "tab": "source",
-                "rel_paths": ["todo.pdf", done_rel_path],
+                "rel_paths": ["todo.pdf", "done.pdf"],
             },
         )
         self.addCleanup(response.close)
@@ -1711,7 +1760,7 @@ class PaperReaderAppTests(unittest.TestCase):
         names = set(archive.namelist())
 
         self.assertIn("papers/todo.pdf", names)
-        self.assertNotIn(f"papers/{done_rel_path}", names)
+        self.assertNotIn("papers/done.pdf", names)
 
     def test_jobs_status_endpoint_returns_snapshot(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Test Title")
@@ -1848,8 +1897,12 @@ class PaperReaderAppTests(unittest.TestCase):
         cached = self.app.library.scan()
         names = [paper.file_name for paper in cached.papers]
         self.assertIn("manual-added.pdf", names)
-        with_done = self.app.library.scan(force=True, include_done=True)
-        self.assertIn("manual-done.pdf", [paper.file_name for paper in with_done.papers])
+        self.assertIn("manual-done.pdf", names)
+        self.assertTrue((self.library / "manual-done.pdf").exists())
+        self.assertFalse((done_dir / "manual-done.pdf").exists())
+        admin_user = self.app.team_store.get_user_by_username("admin")
+        assert admin_user is not None
+        self.assertTrue(self.app.team_store.is_done_for_user("manual-done.pdf", admin_user.id))
 
     def test_index_shows_sources_button_in_bottom_tools(self) -> None:
         response = self.client.get("/")

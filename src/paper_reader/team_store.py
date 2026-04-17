@@ -271,6 +271,17 @@ class TeamStore:
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
 
+                CREATE TABLE IF NOT EXISTS paper_user_states (
+                    paper_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    is_done INTEGER NOT NULL DEFAULT 0,
+                    done_at TEXT,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (paper_id, user_id),
+                    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+
                 CREATE TABLE IF NOT EXISTS paper_likes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     paper_id INTEGER NOT NULL,
@@ -367,6 +378,7 @@ class TeamStore:
                 CREATE INDEX IF NOT EXISTS idx_papers_display_title ON papers(display_title);
                 CREATE INDEX IF NOT EXISTS idx_papers_folder ON papers(folder);
                 CREATE INDEX IF NOT EXISTS idx_paper_recommendations_paper_id ON paper_recommendations(paper_id);
+                CREATE INDEX IF NOT EXISTS idx_paper_user_states_user_id_done ON paper_user_states(user_id, is_done);
                 CREATE INDEX IF NOT EXISTS idx_comments_paper_id ON comments(paper_id);
                 CREATE INDEX IF NOT EXISTS idx_prompt_runs_paper_id ON prompt_runs(paper_id);
                 CREATE INDEX IF NOT EXISTS idx_paper_sources_paper_id ON paper_sources(paper_id);
@@ -833,6 +845,63 @@ class TeamStore:
                     return True
                 conn.execute("DELETE FROM paper_recommendations WHERE id = ?", (int(row["id"]),))
                 return False
+
+    def set_done_state(self, rel_path: str, user_id: int, *, is_done: bool) -> bool:
+        with self._write_lock:
+            with self._connect() as conn:
+                paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+                if paper_id is None:
+                    raise FileNotFoundError(rel_path)
+                now = self._timestamp()
+                conn.execute(
+                    """
+                    INSERT INTO paper_user_states(paper_id, user_id, is_done, done_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(paper_id, user_id) DO UPDATE SET
+                        is_done = excluded.is_done,
+                        done_at = excluded.done_at,
+                        updated_at = excluded.updated_at
+                    """,
+                    (paper_id, user_id, 1 if is_done else 0, now if is_done else None, now),
+                )
+        return is_done
+
+    def toggle_done_state(self, rel_path: str, user_id: int) -> bool:
+        current = self.is_done_for_user(rel_path, user_id)
+        return self.set_done_state(rel_path, user_id, is_done=(not current))
+
+    def is_done_for_user(self, rel_path: str, user_id: int) -> bool:
+        with self._connect() as conn:
+            paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+            if paper_id is None:
+                return False
+            row = conn.execute(
+                "SELECT is_done FROM paper_user_states WHERE paper_id = ? AND user_id = ?",
+                (paper_id, user_id),
+            ).fetchone()
+        return bool(row["is_done"]) if row is not None else False
+
+    def done_rel_paths_for_user(self, user_id: int | None) -> set[str]:
+        if user_id is None:
+            return set()
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT p.rel_path
+                FROM paper_user_states pus
+                JOIN papers p ON p.id = pus.paper_id
+                WHERE pus.user_id = ? AND pus.is_done = 1
+                """,
+                (user_id,),
+            ).fetchall()
+        return {str(row["rel_path"]) for row in rows}
+
+    def mark_done_for_all_users(self, rel_path: str) -> None:
+        users = self.list_users()
+        for user in users:
+            if not user.is_active:
+                continue
+            self.set_done_state(rel_path, user.id, is_done=True)
 
     def toggle_like(self, rel_path: str, user_id: int) -> bool:
         with self._write_lock:

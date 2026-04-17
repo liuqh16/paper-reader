@@ -29,25 +29,23 @@
     <div class="sidebar-panel-stack">
       <section class="assistant-card sidebar-recommendation-panel" data-sidebar-panel="recommendations">
       <div class="team-paper-card-head compact-head">
-        <div>
-          <strong>推荐列表</strong>
-        </div>
+        <strong>推荐列表</strong>
         <span>{{ recommendation_feed|length }} 篇</span>
       </div>
       <div class="recommendation-feed-list sidebar-recommendation-feed">
         {% for paper in recommendation_feed %}
           <a class="recommendation-feed-item {% if selected_paper and paper.rel_path == selected_paper.rel_path %}active{% endif %}" href="{{ paper.paper_url }}">
-            <div>
-              <strong>{{ paper.display_title }}</strong>
-              <p>{{ paper.file_name }}{% if paper.extracted_date %} · {{ paper.extracted_date }}{% endif %}</p>
-            </div>
-            <div class="recommendation-feed-meta">
-              <span>{{ paper.recommendation_count }} 人推荐</span>
-              <span>{{ paper.comment_count }} 条评论</span>
+            <strong class="recommendation-feed-title">{{ paper.display_title }}</strong>
+            <div class="recommendation-feed-foot">
+              <span class="recommendation-feed-caption">{{ paper.extracted_date or paper.file_name }}</span>
+              <div class="recommendation-feed-meta">
+                <span>{{ paper.recommendation_count }} 推荐</span>
+                <span>{{ paper.comment_count }} 评论</span>
+              </div>
             </div>
           </a>
         {% else %}
-          <p class="team-empty-copy">最近两周里还没有被明确推荐的论文。点顶部的推荐按钮后，这里就会开始出现团队想继续读的论文。</p>
+          <p class="team-empty-copy">最近两周还没有团队推荐的论文。</p>
         {% endfor %}
       </div>
       </section>
@@ -86,7 +84,7 @@
           </label>
           <label class="checkbox-line done-toggle-line">
             <input type="checkbox" name="show_done" value="1" {% if show_done %}checked{% endif %}>
-            显示 DONE 论文
+            显示我已读的论文
           </label>
           <div class="tool-actions nav-filter-actions">
             <button type="submit">更新列表</button>
@@ -134,7 +132,7 @@
                               <div class="paper-row-bottom">
                                 <div class="paper-row-flags">
                                   {% if paper.folder %}<span class="paper-row-folder">{{ paper.folder }}</span>{% endif %}
-                                  {% if paper.is_done %}<span class="paper-row-done">DONE</span>{% endif %}
+                                  {% if paper.is_done %}<span class="paper-row-done">已读</span>{% endif %}
                                 </div>
                                 <span class="paper-row-summary">{{ paper.prompt_result_count }}/{{ active_prompt_count }}</span>
                               </div>
@@ -498,7 +496,7 @@
         <div class="team-paper-card-head compact-head">
           <div>
             <strong>协作记录</strong>
-            <span>推荐决定论文是否进入左侧推荐列表，评论补充上下文，推荐理由负责解释为什么值得继续读。</span>
+            <span>推荐只决定是否进入左侧推荐列表；围绕这篇论文的交流统一留在评论区。</span>
           </div>
           <span>{{ selected_paper_context.recommendation_count }} 推荐 / {{ selected_paper_context.comment_count }} 评</span>
         </div>
@@ -507,71 +505,17 @@
           <div class="activity-stat-card">
             <small>团队推荐</small>
             <strong>{{ selected_paper_context.recommendation_count }}</strong>
-            <span>至少需要 1 次明确推荐，才会进入左侧推荐列表</span>
+            <span>决定是否进入左侧推荐列表</span>
           </div>
           <div class="activity-stat-card">
             <small>共享解读</small>
             <strong>{{ selected_paper_context.prompt_runs|length }}</strong>
-            <span>已经跑过的 Prompt 可以直接复用，不用重复生成</span>
+            <span>能直接复用的 Prompt 结果</span>
           </div>
           <div class="activity-stat-card">
             <small>评论讨论</small>
             <strong>{{ selected_paper_context.comment_count }}</strong>
-            <span>评论会沉淀为什么值得读、怎么读、哪里还不确定</span>
-          </div>
-        </div>
-
-        <div class="activity-section">
-          <div class="activity-section-head">
-            <div>
-              <strong>我的推荐</strong>
-              <p>推荐按钮已经移到顶部快捷操作区；这里主要用来补充或修改推荐理由。</p>
-            </div>
-          </div>
-          {% if selected_paper_context.recommended_by_current_user %}
-            <form action="{{ url_for('recommend_route') }}" method="post" class="team-inline-form activity-recommend-form">
-              <input type="hidden" name="folder" value="{{ current_folder }}">
-              <input type="hidden" name="q" value="{{ query }}">
-              <input type="hidden" name="sort" value="{{ sort_by }}">
-              <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-              <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-              <input type="hidden" name="tab" value="{{ selected_tab }}">
-              <input type="hidden" name="mode" value="save">
-              <label>
-                <span>我的推荐理由（可选）</span>
-                <textarea name="reason" rows="3" placeholder="例如：适合本周组会、方法和我们当前需求高度相关">{{ selected_paper_context.current_user_recommendation_reason }}</textarea>
-              </label>
-              <div class="activity-inline-actions">
-                <button type="submit">保存推荐理由</button>
-              </div>
-            </form>
-          {% else %}
-            <div class="activity-hint-card">
-              <strong>还没有加入推荐</strong>
-              <p>先用顶部的推荐按钮把这篇论文加入推荐，下面这个区域才会记录你的推荐理由。</p>
-            </div>
-          {% endif %}
-        </div>
-
-        <div class="activity-section">
-          <div class="activity-section-head">
-            <div>
-              <strong>推荐理由</strong>
-              <p>这里显示每个成员为什么明确把它放进团队推荐。</p>
-            </div>
-          </div>
-          <div class="activity-item-list">
-            {% for recommendation in selected_paper_context.recommendations %}
-              <article class="activity-item-card">
-                <header class="activity-item-head">
-                  <strong>{{ recommendation.display_name }}</strong>
-                  <small>{{ recommendation.created_at }}</small>
-                </header>
-                <p>{{ recommendation.reason or '已加入推荐列表，暂时还没补充原因。' }}</p>
-              </article>
-            {% else %}
-              <p class="team-empty-copy">还没有明确推荐。点顶部的推荐按钮后，这里才会开始记录推荐理由。</p>
-            {% endfor %}
+            <span>围绕判断、疑问和结论留言</span>
           </div>
         </div>
 
@@ -580,7 +524,7 @@
             <div class="activity-section-head">
               <div>
                 <strong>来源</strong>
-                <p>方便确认这篇论文是本地上传、外部导入，还是来自公开来源归档。</p>
+                <p>快速确认论文来自哪里。</p>
               </div>
             </div>
             <div class="activity-item-list compact-activity-list">
@@ -605,7 +549,7 @@
             <div class="activity-section-head">
               <div>
                 <strong>共享解读</strong>
-                <p>谁已经跑过哪些 Prompt，可以直接复用，不用重复生成。</p>
+                <p>已经生成过的结果可以直接复用。</p>
               </div>
             </div>
             <div class="activity-item-list compact-activity-list">
@@ -627,8 +571,8 @@
         <div class="activity-section">
           <div class="activity-section-head">
             <div>
-              <strong>评论区</strong>
-              <p>适合留下判断、疑问、反对意见或复现实验时的提醒。</p>
+              <strong>评论</strong>
+              <p>如果你觉得这篇值得继续读、哪里有疑问、或者复现时踩了坑，都直接写在这里。</p>
             </div>
           </div>
           <form action="{{ url_for('comment_route') }}" method="post" class="team-inline-form activity-comment-form">
@@ -638,8 +582,8 @@
             <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
             <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
             <input type="hidden" name="tab" value="{{ selected_tab }}">
-            <textarea name="body" rows="3" placeholder="例如：我赞同这篇进入推荐列表，因为它把共享上下文和角色分工分得很清楚"></textarea>
-            <button type="submit">发表评论</button>
+            <textarea name="body" rows="3" placeholder="例如：这篇方法值得继续读；我建议下一步先看实验部分，或者这里的设定我还没完全看懂"></textarea>
+            <button type="submit">发布评论</button>
           </form>
           {{ render_comments(selected_paper_context.comments) }}
         </div>
@@ -795,13 +739,13 @@
       <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
       <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
       <input type="hidden" name="tab" value="{{ selected_tab }}">
-      <button type="submit" class="icon-button workspace-dock-button {% if selected_paper.is_done %}is-active{% endif %}" title="{% if selected_paper.is_done %}恢复为未完成{% else %}标记 DONE{% endif %}" aria-label="{% if selected_paper.is_done %}恢复为未完成{% else %}标记 DONE{% endif %}">
+      <button type="submit" class="icon-button workspace-dock-button {% if selected_paper.is_done %}is-active{% endif %}" title="{% if selected_paper.is_done %}恢复为未读{% else %}标记已读{% endif %}" aria-label="{% if selected_paper.is_done %}恢复为未读{% else %}标记已读{% endif %}">
         <span class="icon-shell" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
             <path d="M5.5 12.5l4 4L18.5 7.5"></path>
           </svg>
         </span>
-        <span class="sr-only">标记 DONE</span>
+        <span class="sr-only">标记已读</span>
       </button>
     </form>
   {% endif %}
@@ -1704,7 +1648,7 @@
           <div class="paper-row-bottom">
             <div class="paper-row-flags">
               ${paper.folder ? `<span class="paper-row-folder">${escapeHtml(paper.folder)}</span>` : ""}
-              ${paper.is_done ? '<span class="paper-row-done">DONE</span>' : ""}
+              ${paper.is_done ? '<span class="paper-row-done">已读</span>' : ""}
             </div>
             <span class="paper-row-summary">${paper.prompt_result_count}/${paper.active_prompt_count}</span>
           </div>

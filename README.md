@@ -10,7 +10,7 @@
 - Prompt 管理：可配置多个 Prompt，结果落盘为本地 Markdown
 - 后台任务队列：自动处理新论文，也可批量补跑历史论文
 - 离线阅读包：导出原论文 + Markdown + 本地 HTML 阅读器
-- DONE 流程：已读论文可移入 `DONE/`
+- 个人已读流程：每个用户都可以把论文标记为“已读”，只影响自己的列表视图
 - Sources 页面：浏览外部抓取的论文归档，支持按天打包下载或一键导入主阅读器
 - 登录保护：进入阅读器前需要用户名和密码
 
@@ -29,7 +29,7 @@
 
 其中主要子目录为：
 
-- `/vePFS-Mindverse/share/paper-reader/library/`：主论文库、Prompt 结果、DONE、设置和索引
+- `/vePFS-Mindverse/share/paper-reader/library/`：主论文库、Prompt 结果、设置和索引
 - `/vePFS-Mindverse/share/paper-reader/sources/huggingface_daily/`：Sources 页面使用的外部抓取归档
 
 放进 `library/` 的 PDF / Word 文件会被自动扫描识别。这样把运行目录放到共享盘后，团队成员就能围绕同一份论文库、同一套 Prompt 结果和同一批 Sources 数据协作。
@@ -162,13 +162,13 @@ paper-reader/
 
 ## Prompt 批量补跑
 
-“历史论文批量补跑”面板默认只显示 **不在 `DONE/` 文件夹里的论文**。
+“历史论文批量补跑”面板默认只显示 **你还没标记为已读的论文**。
 
 如果你希望把已完成论文也纳入批量列表，可以在该面板中勾选：
 
-- `批量列表包含 DONE 文件夹里的论文`
+- `把我已读的论文也加入这次批量生成`
 
-这样就会把 `DONE/` 下符合当前筛选条件的论文也一起显示出来。
+这样就会把你自己已经标记为已读、但又想重新处理的论文一起显示出来。
 
 ## Sources 页面
 
