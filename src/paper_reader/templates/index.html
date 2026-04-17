@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_comment_thread.html' import render_comments %}
 {% block title %}论文阅读器{% endblock %}
 {% block content %}
 <section class="workspace-shell tri-workspace" data-layout-root>
@@ -30,25 +31,9 @@
       <div class="team-paper-card-head compact-head">
         <div>
           <strong>推荐列表</strong>
-          <span>最近两周里，大家更常看也更常点赞的论文</span>
         </div>
         <span>{{ recommendation_feed|length }} 篇</span>
       </div>
-      {% if selected_paper %}
-        <form action="{{ url_for('recommend_route') }}" method="post" class="assistant-inline-note sidebar-recommend-action">
-          <input type="hidden" name="folder" value="{{ current_folder }}">
-          <input type="hidden" name="q" value="{{ query }}">
-          <input type="hidden" name="sort" value="{{ sort_by }}">
-          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-          <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-          <input type="hidden" name="tab" value="{{ selected_tab }}">
-          <div>
-            <strong>{{ selected_paper.display_title }}</strong>
-            <p>{% if selected_paper_context.recommended_by_current_user %}你已经把这篇放进推荐列表{% else %}如果这篇值得组里继续看，可以直接把它放进推荐列表{% endif %}</p>
-          </div>
-          <button type="submit" class="{% if selected_paper_context.recommended_by_current_user %}secondary{% endif %}">{% if selected_paper_context.recommended_by_current_user %}取消推荐{% else %}加入推荐列表{% endif %}</button>
-        </form>
-      {% endif %}
       <div class="recommendation-feed-list sidebar-recommendation-feed">
         {% for paper in recommendation_feed %}
           <a class="recommendation-feed-item {% if selected_paper and paper.rel_path == selected_paper.rel_path %}active{% endif %}" href="{{ paper.paper_url }}">
@@ -58,11 +43,11 @@
             </div>
             <div class="recommendation-feed-meta">
               <span>{{ paper.recommendation_count }} 人推荐</span>
-              <span>{{ paper.like_count }} 个赞</span>
+              <span>{{ paper.comment_count }} 条评论</span>
             </div>
           </a>
         {% else %}
-          <p class="team-empty-copy">最近两周里还没有形成明显共识的论文，等大家多点几个赞，这里就会慢慢浮出来。</p>
+          <p class="team-empty-copy">最近两周里还没有被明确推荐的论文。点顶部的推荐按钮后，这里就会开始出现团队想继续读的论文。</p>
         {% endfor %}
       </div>
       </section>
@@ -252,40 +237,62 @@
       {% endfor %}
       {% set summary_tags = tag_groups.summary %}
       {% set overflow_tags = tag_groups.overflow %}
-      <div class="viewer-head viewer-head-compact viewer-head-flat">
-        <div class="viewer-meta-tags">
-          <div class="viewer-meta viewer-meta-inline">
-            {% if selected_paper.extracted_date %}<span>{{ selected_paper.extracted_date }}</span>{% endif %}
-            <span>{{ selected_paper_context.recommendation_count }} 人推荐</span>
-            <span>{{ selected_paper_context.like_count }} 个赞</span>
-            <span>{{ selected_paper_context.comment_count }} 条评论</span>
-          </div>
-          <div class="viewer-tag-summary">
-            {% for tag in summary_tags %}
-              <div class="team-tag-chip source-{{ tag.source_type }} compact-tag-chip">
-                <span>#{{ tag.name }}</span>
+      <section class="viewer-context-panel">
+        <div class="viewer-context-bar">
+          <div class="viewer-meta-grid">
+            {% if selected_paper.extracted_date %}
+              <div class="viewer-meta-pill">
+                <small>论文日期</small>
+                <strong>{{ selected_paper.extracted_date }}</strong>
               </div>
-            {% endfor %}
-            {% if overflow_tags %}
-              <button type="button" class="ghost-button compact-tag-toggle" data-collapsible-toggle="tags-inline" data-extra-count="{{ overflow_tags|length }}" aria-expanded="false" title="展开更多标签">+{{ overflow_tags|length }}</button>
-            {% elif not summary_tags %}
-              <span class="viewer-tag-empty">还没有标签</span>
             {% endif %}
-            {% if is_admin %}
-              <form action="{{ url_for('tag_generate_ai_route') }}" method="post" class="inline-form">
-                <input type="hidden" name="folder" value="{{ current_folder }}">
-                <input type="hidden" name="q" value="{{ query }}">
-                <input type="hidden" name="sort" value="{{ sort_by }}">
-                <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-                <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
-                <input type="hidden" name="tab" value="{{ selected_tab }}">
-                <button type="submit" class="ghost-button compact-tag-toggle">AI 刷新标签</button>
-              </form>
-            {% endif %}
-            <button type="button" class="ghost-button compact-tag-toggle add-tag-chip" data-collapsible-toggle="tag-editor" aria-expanded="false">添标签</button>
+            <div class="viewer-meta-pill">
+              <small>团队推荐</small>
+              <strong>{{ selected_paper_context.recommendation_count }} 人</strong>
+            </div>
+            <div class="viewer-meta-pill">
+              <small>评论讨论</small>
+              <strong>{{ selected_paper_context.comment_count }} 条</strong>
+            </div>
+            <div class="viewer-meta-pill">
+              <small>论文来源</small>
+              <strong>{{ selected_paper_context.sources|length }} 个</strong>
+            </div>
+            <div class="viewer-meta-pill">
+              <small>共享解读</small>
+              <strong>{{ selected_paper_context.prompt_runs|length }} 份</strong>
+            </div>
+          </div>
+          <div class="viewer-tag-row">
+            <div class="viewer-tag-summary">
+              {% for tag in summary_tags %}
+                <div class="team-tag-chip source-{{ tag.source_type }} compact-tag-chip">
+                  <span>#{{ tag.name }}</span>
+                </div>
+              {% endfor %}
+              {% if overflow_tags %}
+                <button type="button" class="ghost-button compact-tag-toggle" data-collapsible-toggle="tags-inline" data-extra-count="{{ overflow_tags|length }}" aria-expanded="false" title="展开更多标签">+{{ overflow_tags|length }}</button>
+              {% elif not summary_tags %}
+                <span class="viewer-tag-empty">还没有标签</span>
+              {% endif %}
+            </div>
+            <div class="viewer-tag-actions">
+              {% if is_admin %}
+                <form action="{{ url_for('tag_generate_ai_route') }}" method="post" class="inline-form">
+                  <input type="hidden" name="folder" value="{{ current_folder }}">
+                  <input type="hidden" name="q" value="{{ query }}">
+                  <input type="hidden" name="sort" value="{{ sort_by }}">
+                  <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+                  <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+                  <input type="hidden" name="tab" value="{{ selected_tab }}">
+                  <button type="submit" class="ghost-button compact-tag-toggle">AI 刷新标签</button>
+                </form>
+              {% endif %}
+              <button type="button" class="ghost-button compact-tag-toggle add-tag-chip" data-collapsible-toggle="tag-editor" aria-expanded="false">添标签</button>
+            </div>
           </div>
         </div>
-      </div>
+      </section>
 
       <div class="viewer-inline-tags-panel" data-collapsible-body="tags-inline" hidden>
         {% if overflow_tags %}
@@ -465,8 +472,8 @@
   <aside class="assistant-pane card layout-pane pane-right" data-pane="right">
     <div class="pane-top pane-top-compact">
       <div>
-        <p class="eyebrow">边看边聊</p>
-        <h2>我爱学 / 一起学</h2>
+        <p class="eyebrow">协作侧栏</p>
+        <h2>协作记录 / 我爱学 / 一起学</h2>
       </div>
       <button type="button" class="icon-button pane-toggle" data-pane-button="right" data-toggle-pane="right" title="折叠右栏" aria-label="折叠右栏">
         <span class="icon-shell" aria-hidden="true">
@@ -481,11 +488,163 @@
     </div>
 
     <div class="assistant-switch-row" role="tablist" aria-label="聊天区域切换">
+      <button type="button" class="assistant-switch-button" data-chat-switch="activity" aria-pressed="false">协作记录</button>
       <button type="button" class="assistant-switch-button" data-chat-switch="private" aria-pressed="false">我爱学</button>
       <button type="button" class="assistant-switch-button" data-chat-switch="shared" aria-pressed="false">一起学</button>
     </div>
 
     {% if selected_paper %}
+      <section class="assistant-card team-chat-card team-activity-card" data-chat-panel="activity" id="chat-activity">
+        <div class="team-paper-card-head compact-head">
+          <div>
+            <strong>协作记录</strong>
+            <span>推荐决定论文是否进入左侧推荐列表，评论补充上下文，推荐理由负责解释为什么值得继续读。</span>
+          </div>
+          <span>{{ selected_paper_context.recommendation_count }} 推荐 / {{ selected_paper_context.comment_count }} 评</span>
+        </div>
+
+        <div class="activity-summary-strip">
+          <div class="activity-stat-card">
+            <small>团队推荐</small>
+            <strong>{{ selected_paper_context.recommendation_count }}</strong>
+            <span>至少需要 1 次明确推荐，才会进入左侧推荐列表</span>
+          </div>
+          <div class="activity-stat-card">
+            <small>共享解读</small>
+            <strong>{{ selected_paper_context.prompt_runs|length }}</strong>
+            <span>已经跑过的 Prompt 可以直接复用，不用重复生成</span>
+          </div>
+          <div class="activity-stat-card">
+            <small>评论讨论</small>
+            <strong>{{ selected_paper_context.comment_count }}</strong>
+            <span>评论会沉淀为什么值得读、怎么读、哪里还不确定</span>
+          </div>
+        </div>
+
+        <div class="activity-section">
+          <div class="activity-section-head">
+            <div>
+              <strong>我的推荐</strong>
+              <p>推荐按钮已经移到顶部快捷操作区；这里主要用来补充或修改推荐理由。</p>
+            </div>
+          </div>
+          {% if selected_paper_context.recommended_by_current_user %}
+            <form action="{{ url_for('recommend_route') }}" method="post" class="team-inline-form activity-recommend-form">
+              <input type="hidden" name="folder" value="{{ current_folder }}">
+              <input type="hidden" name="q" value="{{ query }}">
+              <input type="hidden" name="sort" value="{{ sort_by }}">
+              <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+              <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+              <input type="hidden" name="tab" value="{{ selected_tab }}">
+              <input type="hidden" name="mode" value="save">
+              <label>
+                <span>我的推荐理由（可选）</span>
+                <textarea name="reason" rows="3" placeholder="例如：适合本周组会、方法和我们当前需求高度相关">{{ selected_paper_context.current_user_recommendation_reason }}</textarea>
+              </label>
+              <div class="activity-inline-actions">
+                <button type="submit">保存推荐理由</button>
+              </div>
+            </form>
+          {% else %}
+            <div class="activity-hint-card">
+              <strong>还没有加入推荐</strong>
+              <p>先用顶部的推荐按钮把这篇论文加入推荐，下面这个区域才会记录你的推荐理由。</p>
+            </div>
+          {% endif %}
+        </div>
+
+        <div class="activity-section">
+          <div class="activity-section-head">
+            <div>
+              <strong>推荐理由</strong>
+              <p>这里显示每个成员为什么明确把它放进团队推荐。</p>
+            </div>
+          </div>
+          <div class="activity-item-list">
+            {% for recommendation in selected_paper_context.recommendations %}
+              <article class="activity-item-card">
+                <header class="activity-item-head">
+                  <strong>{{ recommendation.display_name }}</strong>
+                  <small>{{ recommendation.created_at }}</small>
+                </header>
+                <p>{{ recommendation.reason or '已加入推荐列表，暂时还没补充原因。' }}</p>
+              </article>
+            {% else %}
+              <p class="team-empty-copy">还没有明确推荐。点顶部的推荐按钮后，这里才会开始记录推荐理由。</p>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="activity-section activity-split-section">
+          <div>
+            <div class="activity-section-head">
+              <div>
+                <strong>来源</strong>
+                <p>方便确认这篇论文是本地上传、外部导入，还是来自公开来源归档。</p>
+              </div>
+            </div>
+            <div class="activity-item-list compact-activity-list">
+              {% for source in selected_paper_context.sources %}
+                <article class="activity-item-card compact">
+                  <header class="activity-item-head">
+                    <strong>{{ format_source_type(source.source_type) }}</strong>
+                  </header>
+                  {% if source.source_url %}
+                    <p><a href="{{ source.source_url }}" target="_blank" rel="noreferrer">{{ source.source_value }}</a></p>
+                  {% else %}
+                    <p>{{ source.source_value }}</p>
+                  {% endif %}
+                </article>
+              {% else %}
+                <p class="team-empty-copy">这篇论文还没有记录来源信息。</p>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div>
+            <div class="activity-section-head">
+              <div>
+                <strong>共享解读</strong>
+                <p>谁已经跑过哪些 Prompt，可以直接复用，不用重复生成。</p>
+              </div>
+            </div>
+            <div class="activity-item-list compact-activity-list">
+              {% for prompt_run in selected_paper_context.prompt_runs %}
+                <article class="activity-item-card compact">
+                  <header class="activity-item-head">
+                    <strong>{{ prompt_run.prompt_name }}</strong>
+                    <small>{{ prompt_run.generated_at or '已生成' }}</small>
+                  </header>
+                  <p>{{ prompt_run.generated_by_display_name or '系统' }} · v{{ prompt_run.prompt_version }} · {{ prompt_run.model }}</p>
+                </article>
+              {% else %}
+                <p class="team-empty-copy">还没有共享解读。可以在中间标签页里直接开始生成。</p>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+
+        <div class="activity-section">
+          <div class="activity-section-head">
+            <div>
+              <strong>评论区</strong>
+              <p>适合留下判断、疑问、反对意见或复现实验时的提醒。</p>
+            </div>
+          </div>
+          <form action="{{ url_for('comment_route') }}" method="post" class="team-inline-form activity-comment-form">
+            <input type="hidden" name="folder" value="{{ current_folder }}">
+            <input type="hidden" name="q" value="{{ query }}">
+            <input type="hidden" name="sort" value="{{ sort_by }}">
+            <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+            <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+            <input type="hidden" name="tab" value="{{ selected_tab }}">
+            <textarea name="body" rows="3" placeholder="例如：我赞同这篇进入推荐列表，因为它把共享上下文和角色分工分得很清楚"></textarea>
+            <button type="submit">发表评论</button>
+          </form>
+          {{ render_comments(selected_paper_context.comments) }}
+        </div>
+      </section>
+
       <section class="assistant-card team-chat-card" data-chat-panel="private" id="chat-private">
         <div class="team-paper-card-head compact-head">
           <div>
@@ -556,7 +715,7 @@
     {% else %}
       <div class="assistant-empty">
         <strong>还没有选中文件</strong>
-        <p>选中一篇论文后，右边会显示“我爱学”和“一起学”两块聊天区域。</p>
+        <p>选中一篇论文后，右边会显示“协作记录”、“我爱学”和“一起学”三块区域。</p>
       </div>
     {% endif %}
   </aside>
@@ -611,21 +770,22 @@
     <span class="sr-only">切换右栏</span>
   </button>
   {% if selected_paper %}
-    <form action="{{ url_for('like_toggle_route') }}" method="post" class="inline-form workspace-dock-form">
+    <form action="{{ url_for('recommend_route') }}" method="post" class="inline-form workspace-dock-form">
       <input type="hidden" name="folder" value="{{ current_folder }}">
       <input type="hidden" name="q" value="{{ query }}">
       <input type="hidden" name="sort" value="{{ sort_by }}">
       <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
       <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
       <input type="hidden" name="tab" value="{{ selected_tab }}">
-      <button type="submit" class="icon-button workspace-dock-button workspace-like-button {% if selected_paper_context.liked_by_current_user %}is-accent{% endif %}" title="{% if selected_paper_context.liked_by_current_user %}取消点赞{% else %}点赞{% endif %}" aria-label="{% if selected_paper_context.liked_by_current_user %}取消点赞{% else %}点赞{% endif %}">
+      <input type="hidden" name="mode" value="toggle">
+      <button type="submit" class="icon-button workspace-dock-button workspace-recommend-button {% if selected_paper_context.recommended_by_current_user %}is-accent{% endif %}" title="{% if selected_paper_context.recommended_by_current_user %}取消推荐{% else %}加入推荐{% endif %}" aria-label="{% if selected_paper_context.recommended_by_current_user %}取消推荐{% else %}加入推荐{% endif %}">
         <span class="icon-shell" aria-hidden="true">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 20s-7-4.35-7-9.5S8.12 3 12 7c3.88-4 7 0.15 7 3.5S12 20 12 20Z"></path>
           </svg>
         </span>
-        <span class="workspace-like-count" aria-hidden="true">{{ selected_paper_context.like_count }}</span>
-        <span class="sr-only">点赞 {{ selected_paper_context.like_count }}</span>
+        <span class="workspace-recommend-count" aria-hidden="true">{{ selected_paper_context.recommendation_count }}</span>
+        <span class="sr-only">推荐 {{ selected_paper_context.recommendation_count }}</span>
       </button>
     </form>
     <form action="{{ url_for('done_toggle_route') }}" method="post" class="inline-form workspace-dock-form">
@@ -1070,7 +1230,7 @@
       };
       const layoutStateKey = "paper-reader-layout-v4";
       const collapsibleStateKey = "paper-reader-collapsible-v1";
-      const chatPanelStateKey = "paper-reader-chat-panel-v1";
+      const chatPanelStateKey = "paper-reader-chat-panel-v2";
       const sidebarPanelStateKey = "paper-reader-sidebar-panel-v1";
       const defaultLayoutState = {
         leftWidth: 264,
@@ -1085,7 +1245,7 @@
       };
       let layoutState = loadLayoutState();
       let collapsibleState = loadCollapsibleState();
-      let activeChatPanel = loadSimpleValue(chatPanelStateKey, "private");
+      let activeChatPanel = loadSimpleValue(chatPanelStateKey, "activity");
       let activeSidebarPanel = loadSimpleValue(sidebarPanelStateKey, "library");
       let settingsReturnFocus = null;
 
@@ -1647,7 +1807,7 @@
           buttons: chatSwitchButtons,
           panels: chatPanels,
           target,
-          fallback: "private",
+          fallback: "activity",
           buttonAttribute: "chatSwitch",
           panelAttribute: "chatPanel",
         });

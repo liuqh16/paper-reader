@@ -190,6 +190,7 @@ class TeamStore:
         self.db_path = self.root / db_name
         self._write_lock = threading.Lock()
         self._ensure_schema()
+        self._migrate_likes_into_recommendations()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
@@ -381,6 +382,20 @@ class TeamStore:
             "INSERT OR IGNORE INTO roles(slug, name) VALUES (?, ?)",
             [("admin", "管理员"), ("member", "成员")],
         )
+
+    def _migrate_likes_into_recommendations(self) -> None:
+        with self._write_lock:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO paper_recommendations(paper_id, user_id, reason, created_at, updated_at)
+                    SELECT pl.paper_id, pl.user_id, '', pl.created_at, pl.created_at
+                    FROM paper_likes pl
+                    LEFT JOIN paper_recommendations pr
+                      ON pr.paper_id = pl.paper_id AND pr.user_id = pl.user_id
+                    WHERE pr.id IS NULL
+                    """
+                )
 
     def _timestamp(self) -> str:
         return datetime.utcnow().isoformat(timespec="seconds")
@@ -1225,6 +1240,7 @@ class TeamStore:
                     "comment_count": 0,
                     "prompt_runs": [],
                     "sources": [],
+                    "current_user_recommendation_reason": "",
                 }
             paper_id = int(paper_row["id"])
             recommendations = [
@@ -1270,20 +1286,16 @@ class TeamStore:
                 ).fetchall()
             ]
             comments = self._load_comments_locked(conn, paper_id)
-            like_count = int(
-                conn.execute("SELECT COUNT(*) FROM paper_likes WHERE paper_id = ?", (paper_id,)).fetchone()[0]
-            )
-            liked_by_current_user = False
             recommended_by_current_user = False
+            current_user_recommendation_reason = ""
             if current_user_id is not None:
-                liked_by_current_user = conn.execute(
-                    "SELECT 1 FROM paper_likes WHERE paper_id = ? AND user_id = ?",
+                recommendation_row = conn.execute(
+                    "SELECT reason FROM paper_recommendations WHERE paper_id = ? AND user_id = ?",
                     (paper_id, current_user_id),
-                ).fetchone() is not None
-                recommended_by_current_user = conn.execute(
-                    "SELECT 1 FROM paper_recommendations WHERE paper_id = ? AND user_id = ?",
-                    (paper_id, current_user_id),
-                ).fetchone() is not None
+                ).fetchone()
+                recommended_by_current_user = recommendation_row is not None
+                if recommendation_row is not None:
+                    current_user_recommendation_reason = str(recommendation_row["reason"] or "")
             prompt_runs = [
                 TeamPromptRun(
                     prompt_slug=str(row["prompt_slug"]),
@@ -1322,13 +1334,14 @@ class TeamStore:
             "recommendations": recommendations,
             "tags": tags,
             "comments": comments,
-            "like_count": like_count,
-            "liked_by_current_user": liked_by_current_user,
+            "like_count": len(recommendations),
+            "liked_by_current_user": recommended_by_current_user,
             "recommended_by_current_user": recommended_by_current_user,
             "recommendation_count": len(recommendations),
             "comment_count": len(list(flatten_comments(comments))),
             "prompt_runs": prompt_runs,
             "sources": sources,
+            "current_user_recommendation_reason": current_user_recommendation_reason,
         }
 
     def recent_recommendation_feed(self, *, limit: int = 5, window_days: int = 14) -> list[dict[str, Any]]:
@@ -1341,9 +1354,9 @@ class TeamStore:
                     FROM paper_recommendations
                     GROUP BY paper_id
                 ),
-                like_counts AS (
-                    SELECT paper_id, COUNT(*) AS like_count, MAX(created_at) AS latest_like_at
-                    FROM paper_likes
+                comment_counts AS (
+                    SELECT paper_id, COUNT(*) AS comment_count, MAX(created_at) AS latest_comment_at
+                    FROM comments
                     GROUP BY paper_id
                 ),
                 recent_activity AS (
@@ -1351,21 +1364,22 @@ class TeamStore:
                     FROM (
                         SELECT paper_id, updated_at AS activity_at FROM paper_recommendations WHERE updated_at >= ?
                         UNION ALL
-                        SELECT paper_id, created_at AS activity_at FROM paper_likes WHERE created_at >= ?
+                        SELECT paper_id, created_at AS activity_at FROM comments WHERE created_at >= ?
                     ) recent_rows
                     GROUP BY paper_id
                 )
                 SELECT p.rel_path, p.display_title, p.file_name, p.extracted_date,
                        COALESCE(rc.recommendation_count, 0) AS recommendation_count,
-                       COALESCE(lc.like_count, 0) AS like_count,
+                       COALESCE(cc.comment_count, 0) AS comment_count,
                        recent_activity.latest_activity
                 FROM recent_activity
                 JOIN papers p ON p.id = recent_activity.paper_id
                 LEFT JOIN recommendation_counts rc ON rc.paper_id = p.id
-                LEFT JOIN like_counts lc ON lc.paper_id = p.id
+                LEFT JOIN comment_counts cc ON cc.paper_id = p.id
                 WHERE p.is_done = 0
+                  AND COALESCE(rc.recommendation_count, 0) > 0
                 ORDER BY COALESCE(rc.recommendation_count, 0) DESC,
-                         COALESCE(lc.like_count, 0) DESC,
+                         COALESCE(cc.comment_count, 0) DESC,
                          recent_activity.latest_activity DESC,
                          LOWER(p.display_title) ASC
                 LIMIT ?
@@ -1379,7 +1393,8 @@ class TeamStore:
                 "file_name": str(row["file_name"]),
                 "extracted_date": (str(row["extracted_date"]) if row["extracted_date"] else None),
                 "recommendation_count": int(row["recommendation_count"]),
-                "like_count": int(row["like_count"]),
+                "like_count": int(row["recommendation_count"]),
+                "comment_count": int(row["comment_count"]),
                 "latest_activity": str(row["latest_activity"]),
             }
             for row in rows

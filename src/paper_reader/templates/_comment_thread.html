@@ -1,0 +1,22 @@
+{% macro render_comments(comments) -%}
+  {% if comments %}
+    <div class="team-comment-list activity-comment-list">
+      {% for comment in comments %}
+        <article class="team-comment-item activity-comment-card">
+          <header class="activity-item-head">
+            <strong>{{ comment.display_name }}</strong>
+            <small>{{ comment.created_at }}</small>
+          </header>
+          <p>{{ comment.body }}</p>
+          {% if comment.replies %}
+            <div class="activity-comment-children">
+              {{ render_comments(comment.replies) }}
+            </div>
+          {% endif %}
+        </article>
+      {% endfor %}
+    </div>
+  {% else %}
+    <p class="team-empty-copy">还没有评论。先写下你的判断、疑问或者推荐理由，后面的人会更容易接着读。</p>
+  {% endif %}
+{%- endmacro %}

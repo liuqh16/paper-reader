@@ -465,6 +465,8 @@ class PaperReaderAppTests(unittest.TestCase):
                 "show_done": "",
                 "rel_path": "paper.pdf",
                 "tab": "source",
+                "mode": "save",
+                "reason": "",
             },
             follow_redirects=True,
         )
@@ -486,7 +488,7 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
         response = self.client.post(
-            "/like-toggle",
+            "/recommend",
             data={
                 "folder": "",
                 "q": "",
@@ -494,6 +496,8 @@ class PaperReaderAppTests(unittest.TestCase):
                 "show_done": "",
                 "rel_path": "paper.pdf",
                 "tab": "source",
+                "mode": "save",
+                "reason": "",
             },
             follow_redirects=True,
         )
@@ -518,10 +522,58 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn("1 人推荐", html)
         self.assertIn("#robotics", html)
         self.assertIn("1 条评论", html)
-        self.assertIn("1 个赞", html)
+        self.assertIn("协作记录", html)
+        self.assertIn("这个结果很适合组会分享。", html)
+        self.assertIn("我的推荐理由（可选）", html)
 
         search_response = self.client.get("/?q=robotics")
         self.assertIn("Robot Policy", search_response.get_data(as_text=True))
+
+    def test_like_toggle_route_now_behaves_like_recommend(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Merged Recommend")
+
+        response = self.client.post(
+            "/like-toggle",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "show_done": "",
+                "rel_path": "paper.pdf",
+                "tab": "source",
+            },
+            follow_redirects=True,
+        )
+
+        html = response.get_data(as_text=True)
+        feed = self.app.team_store.recent_recommendation_feed(limit=10)
+        feed_paths = [item["rel_path"] for item in feed]
+
+        self.assertIn("点赞已经并入推荐", html)
+        self.assertIn("paper.pdf", feed_paths)
+
+    def test_recommend_save_mode_persists_membership_without_reason(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Recommendation Save")
+
+        response = self.client.post(
+            "/recommend",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "show_done": "",
+                "rel_path": "paper.pdf",
+                "tab": "source",
+                "mode": "save",
+                "reason": "",
+            },
+            follow_redirects=True,
+        )
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("推荐信息已经保存", html)
+        self.assertIn("1 人推荐", html)
 
     def test_shared_and_private_chat_threads_are_persisted_separately(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Chat Paper")
@@ -1135,7 +1187,6 @@ class PaperReaderAppTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("workspace-orbit-dock", html)
-        self.assertIn("workspace-like-button", html)
         self.assertIn("pane-restore-glyph", html)
         self.assertIn('role="toolbar"', html)
         self.assertIn("pane-restore-rail", html)
@@ -1153,20 +1204,23 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn('data-sidebar-switch="recommendations"', html)
         self.assertIn('data-sidebar-switch="library"', html)
         self.assertIn('data-sidebar-panel="library"', html)
-        self.assertIn("右边只显示一个聊天区域；点“我爱学”或“一起学”时，会直接切换到对应那一块。", html)
+        self.assertIn("协作记录 / 我爱学 / 一起学", html)
+        self.assertIn('data-chat-switch="activity"', html)
         self.assertIn('data-chat-switch="private"', html)
+        self.assertIn('data-chat-panel="activity"', html)
         self.assertIn('data-chat-panel="private"', html)
         self.assertIn('data-chat-panel="shared"', html)
         self.assertIn('id="chat-shared" hidden', html)
-        self.assertIn("加入推荐列表", html)
+        self.assertIn("workspace-recommend-button", html)
         self.assertIn("发到一起学", html)
+        self.assertIn("我的推荐", html)
+        self.assertIn("先用顶部的推荐按钮把这篇论文加入推荐", html)
         self.assertIn("compact-tag-toggle", html)
         self.assertIn("添标签", html)
         self.assertIn("原文阅读", html)
-        self.assertNotIn("<strong>讨论</strong>", html)
-        self.assertNotIn("把想法记在这里，后面的人能接着看", html)
-        self.assertNotIn('name="reason"', html)
-        self.assertNotIn("团队视角", html)
+        self.assertIn("评论区", html)
+        self.assertNotIn("workspace-like-button", html)
+        self.assertNotIn("推荐和原来的点赞已经合并；这里只显示团队明确想继续读的论文", html)
 
     def test_workspace_styles_support_dragging_and_mobile_collapses(self) -> None:
         css = (Path(self.app.static_folder) / "style.css").read_text(encoding="utf-8")
@@ -1181,7 +1235,7 @@ class PaperReaderAppTests(unittest.TestCase):
             css,
         )
         self.assertIn(
-            ".workspace-shell.center-collapsed .viewer-head-flat,\n.workspace-shell.center-collapsed .viewer-inline-tags-panel,\n.workspace-shell.center-collapsed .viewer-tag-editor,\n.workspace-shell.center-collapsed .viewer-tabs,\n.workspace-shell.center-collapsed [data-center-stage] {\n  display: none;",
+            ".workspace-shell.center-collapsed .viewer-context-panel,\n.workspace-shell.center-collapsed .viewer-inline-tags-panel,\n.workspace-shell.center-collapsed .viewer-tag-editor,\n.workspace-shell.center-collapsed .viewer-tabs,\n.workspace-shell.center-collapsed [data-center-stage] {\n  display: none;",
             css,
         )
         self.assertIn(

@@ -1612,8 +1612,7 @@ button:disabled,
   padding: 10px;
 }
 .pane-top,
-.viewer-toolbar,
-.viewer-head-compact {
+.viewer-toolbar {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -1737,17 +1736,45 @@ button:disabled,
   font-size: 0.74rem;
   font-weight: 600;
 }
-.viewer-head-compact {
-  padding: 8px 8px 0;
+.viewer-context-panel {
+  min-width: 0;
+  padding: 8px 8px 8px;
 }
-.viewer-head-flat {
-  min-height: 0;
+.viewer-context-bar {
+  display: grid;
+  gap: 10px;
+  width: 100%;
 }
-.viewer-meta-tags {
+.viewer-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+}
+.viewer-meta-pill {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(29, 78, 216, 0.12);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(29, 78, 216, 0.04));
+  min-width: 0;
+}
+.viewer-meta-pill small {
+  color: var(--muted);
+  font-size: var(--font-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.viewer-meta-pill strong {
+  font-size: 0.86rem;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.viewer-tag-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
+  gap: 10px;
   width: 100%;
 }
 .viewer-tag-summary {
@@ -1755,7 +1782,17 @@ button:disabled,
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  justify-content: flex-start;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.viewer-tag-actions {
+  display: flex;
+  align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 0 0 auto;
 }
 .viewer-tag-empty {
   color: var(--muted);
@@ -1931,6 +1968,139 @@ button:disabled,
 .team-chat-card textarea {
   min-height: 112px;
 }
+.team-activity-card {
+  gap: 14px;
+}
+.activity-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.activity-stat-card {
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(29, 78, 216, 0.12);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.96), rgba(29, 78, 216, 0.06));
+}
+.activity-stat-card small {
+  color: var(--muted);
+  font-size: var(--font-micro);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.activity-stat-card strong {
+  font-size: 1.1rem;
+  line-height: 1.1;
+}
+.activity-stat-card span {
+  color: var(--muted);
+  font-size: var(--font-meta);
+  line-height: 1.45;
+}
+.activity-section {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(84, 60, 35, 0.1);
+}
+.activity-section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.activity-section-head strong {
+  display: block;
+  font-size: 0.92rem;
+}
+.activity-section-head p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: var(--font-meta);
+  line-height: 1.45;
+}
+.activity-inline-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.activity-hint-card {
+  display: grid;
+  gap: 4px;
+  padding: 11px 12px;
+  border-radius: 14px;
+  border: 1px dashed rgba(29, 78, 216, 0.28);
+  background: rgba(29, 78, 216, 0.05);
+}
+.activity-hint-card strong {
+  font-size: 0.86rem;
+}
+.activity-hint-card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-meta);
+  line-height: 1.45;
+}
+.activity-recommend-form,
+.activity-comment-form {
+  margin-top: 0;
+}
+.activity-recommend-form label,
+.activity-comment-form label {
+  display: grid;
+  gap: 6px;
+}
+.activity-item-list {
+  display: grid;
+  gap: 8px;
+}
+.activity-item-card {
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(84, 60, 35, 0.12);
+  background: rgba(255, 255, 255, 0.94);
+}
+.activity-item-card.compact {
+  padding: 9px 10px;
+}
+.activity-item-card p {
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+.activity-item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.activity-item-head strong {
+  font-size: 0.84rem;
+}
+.activity-item-head small {
+  color: var(--muted);
+  font-size: var(--font-meta);
+  text-align: right;
+}
+.activity-split-section {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.compact-activity-list {
+  gap: 6px;
+}
+.activity-comment-list {
+  gap: 8px;
+}
+.activity-comment-card {
+  background: rgba(255, 255, 255, 0.96);
+}
+.activity-comment-children {
+  margin-top: 8px;
+  padding-left: 14px;
+  border-left: 2px solid rgba(29, 78, 216, 0.16);
+}
 .pane-resizer {
   position: relative;
   cursor: col-resize;
@@ -1997,7 +2167,7 @@ button:disabled,
   align-items: center;
   justify-content: center;
 }
-.workspace-shell.center-collapsed .viewer-head-flat,
+.workspace-shell.center-collapsed .viewer-context-panel,
 .workspace-shell.center-collapsed .viewer-inline-tags-panel,
 .workspace-shell.center-collapsed .viewer-tag-editor,
 .workspace-shell.center-collapsed .viewer-tabs,
@@ -2035,13 +2205,13 @@ button:disabled,
   width: 16px;
   height: 16px;
 }
-.workspace-like-button {
+.workspace-recommend-button {
   width: auto;
   min-width: 62px;
   padding: 0 12px;
   gap: 7px;
 }
-.workspace-like-count {
+.workspace-recommend-count {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -2050,11 +2220,11 @@ button:disabled,
   font-weight: 700;
   line-height: 1;
 }
-.workspace-like-button .icon-shell {
+.workspace-recommend-button .icon-shell {
   width: 16px;
   height: 16px;
 }
-.workspace-like-button.is-accent .workspace-like-count {
+.workspace-recommend-button.is-accent .workspace-recommend-count {
   color: var(--brand);
 }
 .settings-orb {
@@ -2274,7 +2444,7 @@ body.settings-open .settings-drawer {
     width: 48px;
     height: 48px;
   }
-  .workspace-like-button {
+  .workspace-recommend-button {
     width: auto;
     min-width: 62px;
     padding: 0 12px;
@@ -2287,7 +2457,7 @@ body.settings-open .settings-drawer {
   }
   .main-viewer, .source-viewer, .text-viewer, .prompt-viewer { min-height: 74vh; }
   .viewer-head, .source-viewer-head, .prompt-viewer-head, .text-viewer-intro,
-  .viewer-toolbar, .pane-top, .viewer-head-compact, .hero {
+  .viewer-toolbar, .pane-top, .hero {
     flex-direction: column;
     align-items: flex-start;
   }
@@ -2296,6 +2466,18 @@ body.settings-open .settings-drawer {
     align-items: flex-start;
   }
   .viewer-meta, .viewer-toolbar-actions, .viewer-meta-actions, .viewer-toolbar-status { justify-content: flex-start; }
+  .activity-summary-strip,
+  .activity-split-section {
+    grid-template-columns: 1fr;
+  }
+  .activity-section-head,
+  .viewer-tag-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .viewer-tag-actions {
+    justify-content: flex-start;
+  }
   .tool-grid, .danger-grid, .compact-actions-grid { grid-template-columns: 1fr; }
   .upload-stat-strip { grid-template-columns: 1fr; }
   .upload-visualizer-head { flex-direction: column; }
@@ -2368,7 +2550,7 @@ body.settings-open .settings-drawer {
     bottom: 82px;
     gap: 6px;
   }
-  .workspace-like-button {
+  .workspace-recommend-button {
     min-width: 58px;
     padding: 0 10px;
   }
@@ -2391,11 +2573,16 @@ body.settings-open .settings-drawer {
     grid-template-columns: 1fr;
     align-items: flex-start;
   }
-  .viewer-meta-tags {
-    flex-direction: column;
-    align-items: flex-start;
+  .viewer-context-bar {
+    gap: 8px;
+  }
+  .viewer-meta-grid {
+    grid-template-columns: 1fr 1fr;
   }
   .viewer-tag-summary {
+    justify-content: flex-start;
+  }
+  .viewer-tag-actions {
     justify-content: flex-start;
   }
   .sidebar-recommendation-panel {
@@ -2421,6 +2608,12 @@ body.settings-open .settings-drawer {
     font-size: 0.64rem;
     line-height: 1.3;
     overflow-wrap: anywhere;
+  }
+  .viewer-meta-pill {
+    padding: 8px 9px;
+  }
+  .viewer-meta-pill strong {
+    font-size: 0.8rem;
   }
   .viewer-meta {
     gap: 4px;
@@ -2474,6 +2667,20 @@ body.settings-open .settings-drawer {
   .text-viewer-intro,
   .prompt-viewer-head {
     gap: 6px;
+  }
+  .activity-stat-card {
+    padding: 9px 10px;
+  }
+  .activity-section {
+    gap: 8px;
+    padding-top: 10px;
+  }
+  .activity-item-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .activity-item-head small {
+    text-align: left;
   }
   .docx-preview,
   .docx-preview.wide {

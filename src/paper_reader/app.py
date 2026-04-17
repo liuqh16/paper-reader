@@ -1075,6 +1075,16 @@ def format_bytes(size: int) -> str:
     return f"{size} B"
 
 
+def format_source_type(source_type: str) -> str:
+    mapping = {
+        "arxiv": "arXiv",
+        "openreview": "OpenReview",
+        "pdf_url": "PDF 链接",
+        "huggingface_daily_papers": "Hugging Face Daily",
+    }
+    return mapping.get(source_type, source_type.replace("_", " ").strip().title())
+
+
 def sha256_for_path(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -1431,6 +1441,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         user = current_user()
         return {
             "format_bytes": format_bytes,
+            "format_source_type": format_source_type,
             "allowed_extensions": ", ".join(sorted(ALLOWED_EXTENSIONS)),
             "current_user": user,
             "is_admin": bool(user and user.role == "admin"),
@@ -2003,6 +2014,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             "comment_count": 0,
             "prompt_runs": [],
             "sources": [],
+            "current_user_recommendation_reason": "",
         }
         selected_chat_context: dict[str, Any] = {
             "shared": {"messages": [], "count": 0, "visibility": "shared"},
@@ -2542,10 +2554,11 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
         try:
             ensure_paper_metadata(rel_path)
+            mode = request.form.get("mode", "toggle").strip().lower() or "toggle"
             reason = request.form.get("reason", "")
-            if reason.strip():
+            if mode == "save":
                 app.team_store.add_recommendation(rel_path, actor.id, reason)  # type: ignore[attr-defined]
-                flash("推荐说明已经记下。", "success")
+                flash("推荐信息已经保存；这篇论文会继续出现在团队推荐里。", "success")
             else:
                 recommended = app.team_store.toggle_recommendation(rel_path, actor.id)  # type: ignore[attr-defined]
                 flash("这篇论文已经加入推荐。" if recommended else "这篇论文已经从推荐里移除。", "success")
@@ -2567,8 +2580,13 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
         try:
             ensure_paper_metadata(rel_path)
-            liked = app.team_store.toggle_like(rel_path, actor.id)  # type: ignore[attr-defined]
-            flash("已点赞。" if liked else "已取消点赞。", "success")
+            recommended = app.team_store.toggle_recommendation(rel_path, actor.id)  # type: ignore[attr-defined]
+            flash(
+                "点赞已经并入推荐；这篇论文已经加入推荐。"
+                if recommended
+                else "点赞已经并入推荐；这篇论文已经从推荐里移除。",
+                "success",
+            )
         except FileNotFoundError:
             flash("论文不存在。", "error")
         return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
@@ -3076,4 +3094,4 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8022, debug=False)
+    app.run(host="0.0.0.0", port=8000, debug=False)
