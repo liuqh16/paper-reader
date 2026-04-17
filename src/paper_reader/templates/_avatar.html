@@ -1,0 +1,9 @@
+{% macro render_avatar(image_url, fallback, class_name='avatar avatar-md') -%}
+  <span class="{{ class_name }}" aria-hidden="true">
+    {% if image_url %}
+      <img class="avatar-image" src="{{ image_url }}" alt="">
+    {% else %}
+      <span class="avatar-fallback">{{ fallback }}</span>
+    {% endif %}
+  </span>
+{%- endmacro %}

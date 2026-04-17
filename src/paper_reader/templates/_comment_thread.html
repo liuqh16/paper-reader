@@ -1,11 +1,15 @@
+{% from '_avatar.html' import render_avatar %}
 {% macro render_comments(comments) -%}
   {% if comments %}
     <div class="team-comment-list activity-comment-list">
       {% for comment in comments %}
         <article class="team-comment-item activity-comment-card">
-          <header class="activity-item-head">
-            <strong>{{ comment.display_name }}</strong>
-            <small>{{ comment.created_at }}</small>
+          <header class="activity-item-head activity-person-head">
+            {{ render_avatar(avatar_url_for(comment), avatar_initials(comment.display_name), 'avatar avatar-sm activity-avatar') }}
+            <div class="activity-item-person-copy">
+              <strong>{{ comment.display_name }}</strong>
+              <small>{{ comment.created_at }}</small>
+            </div>
           </header>
           <p>{{ comment.body }}</p>
           {% if comment.replies %}

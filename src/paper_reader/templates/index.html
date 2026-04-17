@@ -1,5 +1,6 @@
 {% extends 'base.html' %}
-{% from '_comment_thread.html' import render_comments %}
+{% from '_comment_thread.html' import render_comments with context %}
+{% from '_avatar.html' import render_avatar %}
 {% block title %}论文阅读器{% endblock %}
 {% block content %}
 <section class="workspace-shell tri-workspace" data-layout-root>
@@ -600,9 +601,12 @@
         <div class="team-chat-thread" data-chat-thread="private">
           {% for message in selected_chat_context.private.messages %}
             <article class="team-chat-message role-{{ message.role }} status-{{ message.status }}">
-              <header>
-                <strong>{{ message.display_name }}</strong>
-                <small>{{ message.created_at }}</small>
+              <header class="chat-message-head">
+                {{ render_avatar(message.avatar_url, message.avatar_label, 'avatar avatar-sm chat-avatar') }}
+                <div class="chat-message-copy">
+                  <strong>{{ message.display_name }}</strong>
+                  <small>{{ message.created_at }}</small>
+                </div>
               </header>
               <div class="team-chat-body markdown-render">{{ message.body_html|safe }}</div>
             </article>
@@ -634,9 +638,12 @@
         <div class="team-chat-thread" data-chat-thread="shared">
           {% for message in selected_chat_context.shared.messages %}
             <article class="team-chat-message role-{{ message.role }} status-{{ message.status }}">
-              <header>
-                <strong>{{ message.display_name }}</strong>
-                <small>{{ message.created_at }}</small>
+              <header class="chat-message-head">
+                {{ render_avatar(message.avatar_url, message.avatar_label, 'avatar avatar-sm chat-avatar') }}
+                <div class="chat-message-copy">
+                  <strong>{{ message.display_name }}</strong>
+                  <small>{{ message.created_at }}</small>
+                </div>
               </header>
               <div class="team-chat-body markdown-render">{{ message.body_html|safe }}</div>
             </article>
@@ -756,7 +763,7 @@
     <img src="{{ url_for('static', filename='logo-mark.svg') }}" alt="Paper Reader logo">
   </span>
   {% if current_user %}
-    <span class="settings-orb-badge">{{ current_user.display_name[:1]|upper }}</span>
+    <span class="settings-orb-badge">{{ render_avatar(avatar_url_for(current_user), avatar_initials(current_user.display_name), 'avatar avatar-badge') }}</span>
   {% endif %}
 </button>
 
@@ -774,13 +781,28 @@
   </div>
   {% if current_user %}
     <div class="settings-user-card">
-      <div class="settings-user-avatar">{{ current_user.display_name[:1]|upper }}</div>
+      {{ render_avatar(avatar_url_for(current_user), avatar_initials(current_user.display_name), 'avatar avatar-lg settings-user-avatar') }}
       <div class="settings-user-copy">
         <span class="meta-label">当前用户</span>
         <strong>{{ current_user.display_name }}</strong>
         <small>{{ current_user.username }} · {{ current_user.role }}</small>
       </div>
-      <a class="button-link secondary" href="{{ url_for('logout') }}">退出登录</a>
+      <div class="settings-user-actions">
+        <form class="settings-avatar-form" action="{{ url_for('profile_avatar_route') }}" method="post" enctype="multipart/form-data">
+          <input type="hidden" name="folder" value="{{ current_folder }}">
+          <input type="hidden" name="q" value="{{ query }}">
+          <input type="hidden" name="sort" value="{{ sort_by }}">
+          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+          <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
+          <input type="hidden" name="tab" value="{{ selected_tab }}">
+          <label class="settings-avatar-picker">
+            <span>上传头像</span>
+            <input type="file" name="avatar" accept=".png,.jpg,.jpeg,.webp,.gif">
+          </label>
+          <button type="submit" class="secondary">保存头像</button>
+        </form>
+        <a class="button-link secondary" href="{{ url_for('logout') }}">退出登录</a>
+      </div>
     </div>
   {% endif %}
   <div class="drawer-quick-actions drawer-quick-actions-icons">
@@ -1793,11 +1815,17 @@
 
       function renderChatMessage(message) {
         const bodyHtml = message.body_html || `<p>${escapeHtml(message.body)}</p>`;
+        const avatarHtml = message.avatar_url
+          ? `<span class="avatar avatar-sm chat-avatar"><img class="avatar-image" src="${escapeHtml(message.avatar_url)}" alt=""></span>`
+          : `<span class="avatar avatar-sm chat-avatar"><span class="avatar-fallback">${escapeHtml(message.avatar_label || '?')}</span></span>`;
         return `
           <article class="team-chat-message role-${escapeHtml(message.role)} status-${escapeHtml(message.status)}">
-            <header>
-              <strong>${escapeHtml(message.display_name)}</strong>
-              <small>${escapeHtml(message.created_at)}</small>
+            <header class="chat-message-head">
+              ${avatarHtml}
+              <div class="chat-message-copy">
+                <strong>${escapeHtml(message.display_name)}</strong>
+                <small>${escapeHtml(message.created_at)}</small>
+              </div>
             </header>
             <div class="team-chat-body markdown-render">${bodyHtml}</div>
           </article>

@@ -127,6 +127,7 @@ class TeamUser:
     role: str
     is_active: bool
     created_at: str
+    avatar_rel_path: str | None = None
 
 
 @dataclass(slots=True)
@@ -154,6 +155,7 @@ class TeamComment:
     id: int
     user_id: int
     display_name: str
+    avatar_rel_path: str | None
     body: str
     created_at: str
     parent_id: int | None
@@ -177,6 +179,7 @@ class TeamChatMessage:
     id: int
     role: str
     display_name: str
+    avatar_rel_path: str | None
     body: str
     created_at: str
     status: str
@@ -214,6 +217,7 @@ class TeamStore:
                     username TEXT NOT NULL UNIQUE,
                     display_name TEXT NOT NULL,
                     password_hash TEXT NOT NULL,
+                    avatar_rel_path TEXT,
                     is_active INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -387,6 +391,7 @@ class TeamStore:
                 CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_id ON chat_messages(thread_id);
                 """
             )
+            self._ensure_users_avatar_column(conn)
             self._seed_roles(conn)
 
     def _seed_roles(self, conn: sqlite3.Connection) -> None:
@@ -394,6 +399,11 @@ class TeamStore:
             "INSERT OR IGNORE INTO roles(slug, name) VALUES (?, ?)",
             [("admin", "管理员"), ("member", "成员")],
         )
+
+    def _ensure_users_avatar_column(self, conn: sqlite3.Connection) -> None:
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "avatar_rel_path" not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN avatar_rel_path TEXT")
 
     def _migrate_likes_into_recommendations(self) -> None:
         with self._write_lock:
@@ -418,7 +428,7 @@ class TeamStore:
                 count = int(conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
                 existing = conn.execute(
                     """
-                    SELECT u.id, u.username, u.display_name, u.is_active, u.created_at, r.slug AS role
+                    SELECT u.id, u.username, u.display_name, u.avatar_rel_path, u.is_active, u.created_at, r.slug AS role
                     FROM users u
                     LEFT JOIN user_roles ur ON ur.user_id = u.id
                     LEFT JOIN roles r ON r.id = ur.role_id
@@ -445,7 +455,7 @@ class TeamStore:
                     )
                 user = conn.execute(
                     """
-                    SELECT u.id, u.username, u.display_name, u.is_active, u.created_at, COALESCE(r.slug, 'member') AS role
+                    SELECT u.id, u.username, u.display_name, u.avatar_rel_path, u.is_active, u.created_at, COALESCE(r.slug, 'member') AS role
                     FROM users u
                     LEFT JOIN user_roles ur ON ur.user_id = u.id
                     LEFT JOIN roles r ON r.id = ur.role_id
@@ -462,13 +472,14 @@ class TeamStore:
             role=str(user["role"]),
             is_active=bool(user["is_active"]),
             created_at=str(user["created_at"]),
+            avatar_rel_path=(str(user["avatar_rel_path"]) if user["avatar_rel_path"] else None),
         )
 
     def authenticate_user(self, username: str, password: str) -> TeamUser | None:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT u.id, u.username, u.display_name, u.password_hash, u.is_active, u.created_at, COALESCE(r.slug, 'member') AS role
+                SELECT u.id, u.username, u.display_name, u.password_hash, u.avatar_rel_path, u.is_active, u.created_at, COALESCE(r.slug, 'member') AS role
                 FROM users u
                 LEFT JOIN user_roles ur ON ur.user_id = u.id
                 LEFT JOIN roles r ON r.id = ur.role_id
@@ -487,6 +498,7 @@ class TeamStore:
             role=str(row["role"]),
             is_active=bool(row["is_active"]),
             created_at=str(row["created_at"]),
+            avatar_rel_path=(str(row["avatar_rel_path"]) if row["avatar_rel_path"] else None),
         )
 
     def get_user(self, user_id: int | None) -> TeamUser | None:
@@ -495,7 +507,7 @@ class TeamStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT u.id, u.username, u.display_name, u.is_active, u.created_at, COALESCE(r.slug, 'member') AS role
+                SELECT u.id, u.username, u.display_name, u.avatar_rel_path, u.is_active, u.created_at, COALESCE(r.slug, 'member') AS role
                 FROM users u
                 LEFT JOIN user_roles ur ON ur.user_id = u.id
                 LEFT JOIN roles r ON r.id = ur.role_id
@@ -512,13 +524,14 @@ class TeamStore:
             role=str(row["role"]),
             is_active=bool(row["is_active"]),
             created_at=str(row["created_at"]),
+            avatar_rel_path=(str(row["avatar_rel_path"]) if row["avatar_rel_path"] else None),
         )
 
     def get_user_by_username(self, username: str) -> TeamUser | None:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT u.id, u.username, u.display_name, u.is_active, u.created_at, COALESCE(r.slug, 'member') AS role
+                SELECT u.id, u.username, u.display_name, u.avatar_rel_path, u.is_active, u.created_at, COALESCE(r.slug, 'member') AS role
                 FROM users u
                 LEFT JOIN user_roles ur ON ur.user_id = u.id
                 LEFT JOIN roles r ON r.id = ur.role_id
@@ -535,13 +548,14 @@ class TeamStore:
             role=str(row["role"]),
             is_active=bool(row["is_active"]),
             created_at=str(row["created_at"]),
+            avatar_rel_path=(str(row["avatar_rel_path"]) if row["avatar_rel_path"] else None),
         )
 
     def list_users(self) -> list[TeamUser]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT u.id, u.username, u.display_name, u.is_active, u.created_at, COALESCE(r.slug, 'member') AS role
+                SELECT u.id, u.username, u.display_name, u.avatar_rel_path, u.is_active, u.created_at, COALESCE(r.slug, 'member') AS role
                 FROM users u
                 LEFT JOIN user_roles ur ON ur.user_id = u.id
                 LEFT JOIN roles r ON r.id = ur.role_id
@@ -556,6 +570,7 @@ class TeamStore:
                 role=str(row["role"]),
                 is_active=bool(row["is_active"]),
                 created_at=str(row["created_at"]),
+                avatar_rel_path=(str(row["avatar_rel_path"]) if row["avatar_rel_path"] else None),
             )
             for row in rows
         ]
@@ -672,6 +687,21 @@ class TeamStore:
         user = self.get_user(user_id)
         if user is None:
             raise RuntimeError("Failed to update user.")
+        return user
+
+    def update_user_avatar(self, user_id: int, avatar_rel_path: str | None) -> TeamUser:
+        with self._write_lock:
+            with self._connect() as conn:
+                row = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+                if row is None:
+                    raise FileNotFoundError(user_id)
+                conn.execute(
+                    "UPDATE users SET avatar_rel_path = ?, updated_at = ? WHERE id = ?",
+                    (avatar_rel_path, self._timestamp(), user_id),
+                )
+        user = self.get_user(user_id)
+        if user is None:
+            raise RuntimeError("Failed to update user avatar.")
         return user
 
     def is_admin(self, user_id: int | None) -> bool:
@@ -1129,7 +1159,8 @@ class TeamStore:
             SELECT *
             FROM (
                 SELECT cm.id, cm.role, cm.body, cm.created_at, cm.status, cm.model,
-                       COALESCE(u.display_name, u.username) AS display_name
+                       COALESCE(u.display_name, u.username) AS display_name,
+                       u.avatar_rel_path AS avatar_rel_path
                 FROM chat_messages cm
                 LEFT JOIN users u ON u.id = cm.user_id
                 WHERE cm.thread_id = ?
@@ -1149,6 +1180,7 @@ class TeamStore:
                     if row["display_name"]
                     else ("Paper Bot" if str(row["role"]) == "assistant" else "成员")
                 ),
+                avatar_rel_path=(str(row["avatar_rel_path"]) if row["avatar_rel_path"] else None),
                 body=str(row["body"]),
                 created_at=str(row["created_at"]),
                 status=str(row["status"]),
@@ -1550,7 +1582,9 @@ class TeamStore:
     def _load_comments_locked(self, conn: sqlite3.Connection, paper_id: int) -> list[TeamComment]:
         rows = conn.execute(
             """
-            SELECT c.id, c.user_id, c.parent_id, c.body, c.created_at, COALESCE(u.display_name, u.username) AS display_name
+            SELECT c.id, c.user_id, c.parent_id, c.body, c.created_at,
+                   COALESCE(u.display_name, u.username) AS display_name,
+                   u.avatar_rel_path AS avatar_rel_path
             FROM comments c
             JOIN users u ON u.id = c.user_id
             WHERE c.paper_id = ?
@@ -1565,6 +1599,7 @@ class TeamStore:
                 id=int(row["id"]),
                 user_id=int(row["user_id"]),
                 display_name=str(row["display_name"]),
+                avatar_rel_path=(str(row["avatar_rel_path"]) if row["avatar_rel_path"] else None),
                 body=str(row["body"]),
                 created_at=str(row["created_at"]),
                 parent_id=(int(row["parent_id"]) if row["parent_id"] is not None else None),

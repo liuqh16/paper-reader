@@ -39,6 +39,8 @@ CACHE_FILE_NAME = ".paper_reader_index.json"
 DONE_INDEX_FILE_NAME = ".paper_reader_done_index.json"
 SUMMARY_DIR_NAME = ".paper-reader-ai"
 DONE_DIR_NAME = "DONE"
+AVATAR_DIR_NAME = ".paper-reader-avatars"
+ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 DEFAULT_BATCH_PANEL_PAGE_SIZE = 50
 DEFAULT_LOGIN_USERNAME = "admin"
 DEFAULT_LOGIN_PASSWORD = "paperpaperreaderreader12678"
@@ -1373,6 +1375,8 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     app.config["SECRET_KEY"] = "paper-reader-dev-secret"
     app.config["LIBRARY_ROOT"] = root.resolve()
     app.config["SOURCE_ARCHIVE_ROOT"] = source_root.resolve()
+    app.config["AVATAR_ROOT"] = (root / AVATAR_DIR_NAME).resolve()
+    Path(app.config["AVATAR_ROOT"]).mkdir(parents=True, exist_ok=True)
     app.config["LOGIN_USERNAME"] = login_username
     app.config["LOGIN_PASSWORD"] = login_password
     app.config["SESSION_COOKIE_HTTPONLY"] = True
@@ -1442,6 +1446,24 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         session["display_name"] = user.display_name
         session["role"] = user.role
 
+    def avatar_initials(value: str | None) -> str:
+        text = (value or "").strip()
+        return (text[:1] or "?").upper()
+
+    def avatar_url_for_rel_path(rel_path: str | None) -> str | None:
+        if not rel_path:
+            return None
+        return url_for("avatar_file_route", filename=rel_path)
+
+    def avatar_url_for(user: Any | None) -> str | None:
+        if user is None:
+            return None
+        rel_path = getattr(user, "avatar_rel_path", None)
+        return avatar_url_for_rel_path(str(rel_path) if rel_path else None)
+
+    def avatar_filename_for_user(user_id: int, suffix: str) -> str:
+        return f"user-{user_id}{suffix.lower()}"
+
     @app.context_processor
     def inject_helpers() -> dict[str, Any]:
         user = current_user()
@@ -1452,6 +1474,8 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             "current_user": user,
             "is_admin": bool(user and user.role == "admin"),
             "member_submission_folder": default_member_submission_folder(user),
+            "avatar_initials": avatar_initials,
+            "avatar_url_for": avatar_url_for,
         }
 
     def user_done_rel_paths(user_id: int | None = None) -> set[str]:
@@ -1483,6 +1507,52 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         session.clear()
         flash("你已退出登录。", "success")
         return redirect(url_for("login"))
+
+    @app.get("/avatars/<path:filename>")
+    def avatar_file_route(filename: str) -> Any:
+        safe_name = secure_filename(filename)
+        if not safe_name or safe_name != filename:
+            abort(404)
+        avatar_root = Path(app.config["AVATAR_ROOT"])
+        target = avatar_root / safe_name
+        if not target.exists() or not target.is_file():
+            abort(404)
+        return send_from_directory(avatar_root, safe_name, as_attachment=False)
+
+    @app.post("/profile/avatar")
+    def profile_avatar_route() -> Any:
+        current_folder = request.form.get("folder", "")
+        query = request.form.get("q", "")
+        sort_by = request.form.get("sort", "date_desc")
+        show_done = parse_checkbox(request.form.get("show_done"))
+        selected_paper = request.form.get("paper", "") or None
+        tab = request.form.get("tab", "source")
+        actor = current_user()
+        if actor is None:
+            flash("请先登录。", "error")
+            return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
+
+        file = request.files.get("avatar")
+        if file is None or not getattr(file, "filename", ""):
+            flash("先选一张头像图片再上传。", "error")
+            return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
+
+        suffix = Path(file.filename).suffix.lower()
+        if suffix not in ALLOWED_AVATAR_EXTENSIONS:
+            flash("头像暂时只支持 PNG / JPG / JPEG / WEBP / GIF。", "error")
+            return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
+
+        avatar_root = Path(app.config["AVATAR_ROOT"])
+        avatar_root.mkdir(parents=True, exist_ok=True)
+        for existing in avatar_root.glob(f"user-{actor.id}.*"):
+            existing.unlink(missing_ok=True)
+
+        avatar_name = avatar_filename_for_user(actor.id, suffix)
+        destination = avatar_root / avatar_name
+        file.save(destination)
+        app.team_store.update_user_avatar(actor.id, avatar_name)  # type: ignore[attr-defined]
+        flash("头像已经更新。", "success")
+        return redirect_to_index(current_folder, query, sort_by, selected_paper, tab, show_done=show_done)
 
     @app.route("/login", methods=["GET", "POST"])
     def login() -> Any:
@@ -1907,6 +1977,8 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     def serialize_chat_message(message: Any) -> dict[str, Any]:
         payload = asdict(message) if hasattr(message, "__dataclass_fields__") else dict(message)
         payload["body_html"] = render_markdown(str(payload.get("body", "")))
+        payload["avatar_url"] = avatar_url_for_rel_path(payload.get("avatar_rel_path"))
+        payload["avatar_label"] = avatar_initials(str(payload.get("display_name", "")))
         return payload
 
     def serialize_chat_context(context: dict[str, Any]) -> dict[str, Any]:

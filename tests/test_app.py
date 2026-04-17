@@ -54,6 +54,13 @@ DOCX_CORE = """<?xml version='1.0' encoding='UTF-8'?>
 </cp:coreProperties>
 """
 
+PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n"
+    b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    b"\x00\x00\x00\x0cIDATx\x9cc\xf8\xcf\xc0\x00\x00\x03\x01\x01\x00\xc9\xfe\x92\xef"
+    b"\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
 
 class PaperReaderAppTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -519,6 +526,36 @@ class PaperReaderAppTests(unittest.TestCase):
         )
         self.assertEqual(custom_login.status_code, 302)
         self.assertEqual(custom_login.headers["Location"], "/")
+
+    def test_profile_avatar_upload_updates_current_user_and_serves_file(self) -> None:
+        response = self.client.post(
+            "/profile/avatar",
+            data={
+                "folder": "",
+                "q": "",
+                "sort": "date_desc",
+                "show_done": "",
+                "paper": "",
+                "tab": "source",
+                "avatar": (io.BytesIO(PNG_BYTES), "avatar.png"),
+            },
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+
+        html = response.get_data(as_text=True)
+        user = self.app.team_store.get_user_by_username("admin")
+        assert user is not None
+        assert user.avatar_rel_path is not None
+        avatar_path = self.library / ".paper-reader-avatars" / user.avatar_rel_path
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(avatar_path.exists())
+        self.assertIn("/avatars/", html)
+
+        avatar_response = self.client.get(f"/avatars/{user.avatar_rel_path}")
+        self.assertEqual(avatar_response.status_code, 200)
+        self.assertEqual(avatar_response.data, PNG_BYTES)
 
     def test_load_env_file_values_parses_simple_dotenv(self) -> None:
         env_file = self.library / ".env.parse"
