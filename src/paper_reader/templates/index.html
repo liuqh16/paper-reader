@@ -164,7 +164,7 @@
       <div class="viewer-toolbar-main">
         <div class="viewer-toolbar-copy">
           {% if selected_paper %}
-            <p class="eyebrow">原文阅读</p>
+            <p class="eyebrow">{{ '原文阅读' if selected_tab == 'source' else '核心解读' }}</p>
             <h2>{{ selected_paper.display_title }}</h2>
             <p class="viewer-subtitle">{{ selected_paper.file_name }} · {{ format_bytes(selected_paper.file_size) }}</p>
           {% else %}
@@ -236,6 +236,7 @@
       {% endfor %}
       {% set summary_tags = tag_groups.summary %}
       {% set overflow_tags = tag_groups.overflow %}
+      {% if selected_tab == 'source' %}
       <section class="viewer-context-panel">
         <div class="viewer-context-bar">
           <div class="viewer-meta-grid">
@@ -366,17 +367,20 @@
         </form>
       </div>
 
+      {% endif %}
+
       <div class="reader-stage" data-center-stage>
         {% if selected_tab == 'source' %}
           {% if selected_paper.preview_kind == 'pdf' %}
-            <div class="source-viewer">
+            <div class="source-viewer" data-reader-fullscreen="source-viewer">
               <div class="source-viewer-head">
                 <div>
                   <strong>原文</strong>
                   <span>这里会直接显示论文正文</span>
                 </div>
-                <div class="prompt-viewer-actions">
-                  <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
+                <div class="prompt-viewer-actions prompt-viewer-actions-compact">
+                  <button type="button" class="button-link secondary reader-fullscreen-button" data-fullscreen-target="source-viewer">全屏阅读</button>
+                  <a class="button-link secondary reader-mini-link" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
                 </div>
               </div>
               <iframe class="main-viewer" title="{{ selected_paper.display_title }}" src="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}"></iframe>
@@ -432,8 +436,8 @@
           {% endif %}
         {% elif selected_prompt %}
           {% if selected_prompt_content %}
-            <div class="prompt-viewer prompt-viewer-wide">
-              <div class="prompt-viewer-head">
+            <div class="prompt-viewer prompt-viewer-wide" data-reader-fullscreen="prompt-viewer">
+              <div class="prompt-viewer-head prompt-viewer-head-compact">
                 <div>
                   <strong>{{ selected_prompt.name }}</strong>
                   <span>
@@ -444,10 +448,11 @@
                     {% endif %}
                   </span>
                 </div>
-                <div class="prompt-viewer-actions">
-                  <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
+                <div class="prompt-viewer-actions prompt-viewer-actions-compact">
+                  <button type="button" class="button-link secondary reader-fullscreen-button" data-fullscreen-target="prompt-viewer">全屏阅读</button>
+                  <a class="button-link secondary reader-mini-link" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">原文</a>
                   {% if selected_prompt_info and selected_prompt_info.result_rel_path %}
-                    <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_prompt_info.result_rel_path) }}" target="_blank" rel="noreferrer">打开 MD</a>
+                    <a class="button-link secondary reader-mini-link" href="{{ url_for('serve_file', rel_path=selected_prompt_info.result_rel_path) }}" target="_blank" rel="noreferrer">MD</a>
                   {% endif %}
                   <form action="{{ url_for('prompt_run_route') }}" method="post" class="inline-form">
                     <input type="hidden" name="folder" value="{{ current_folder }}">
@@ -457,7 +462,7 @@
                     <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
                     <input type="hidden" name="prompt_slug" value="{{ selected_prompt.slug }}">
                     <input type="hidden" name="force" value="on">
-                    <button type="submit" class="secondary">重新运行</button>
+                    <button type="submit" class="secondary reader-mini-link">重跑</button>
                   </form>
                 </div>
               </div>
@@ -823,6 +828,7 @@
 </button>
 
 <section class="bottom-tools card settings-drawer" id="settings-drawer" data-settings-drawer role="dialog" aria-modal="false" aria-labelledby="settings-drawer-title" aria-hidden="true" tabindex="-1" inert>
+  <button type="button" class="settings-resize-handle" data-settings-resize title="拖动调整常用操作宽度" aria-label="拖动调整常用操作宽度"></button>
   <div class="tools-head settings-head">
     <div>
       <p class="eyebrow">常用操作</p>
@@ -841,6 +847,7 @@
         <span class="meta-label">当前用户</span>
         <strong>{{ current_user.display_name }}</strong>
         <small>{{ current_user.username }} · {{ current_user.role }}</small>
+        <a class="settings-logout-link" href="{{ url_for('logout') }}">退出登录</a>
       </div>
       <div class="settings-user-actions">
         <form class="settings-avatar-form" action="{{ url_for('profile_avatar_route') }}" method="post" enctype="multipart/form-data">
@@ -856,7 +863,6 @@
           </label>
           <button type="submit" class="secondary">保存头像</button>
         </form>
-        <a class="button-link secondary" href="{{ url_for('logout') }}">退出登录</a>
       </div>
     </div>
   {% endif %}
@@ -1222,6 +1228,18 @@
     </div>
   </details>
 </section>
+{% if selected_share_payload %}
+  <div class="share-toast" data-share-toast hidden>
+    <div class="share-toast-copy">
+      <strong data-share-toast-title>分享文案已复制</strong>
+      <span data-share-toast-text>可以直接粘贴发送。</span>
+    </div>
+    <div class="share-toast-actions">
+      <button type="button" class="button-link secondary share-toast-undo" data-share-undo hidden>撤销</button>
+      <button type="button" class="button-link secondary share-toast-dismiss" data-share-dismiss>关闭</button>
+    </div>
+  </div>
+{% endif %}
 {% endblock %}
 {% block scripts %}
   <script id="initial-job-snapshot" type="application/json">{{ initial_job_snapshot | tojson }}</script>
@@ -1277,8 +1295,15 @@
       const settingsOrb = document.getElementById("settings-orb");
       const settingsDrawer = document.querySelector("[data-settings-drawer]");
       const closeSettingsButton = settingsDrawer ? settingsDrawer.querySelector("[data-close-settings]") : null;
+      const settingsResizeHandle = settingsDrawer ? settingsDrawer.querySelector("[data-settings-resize]") : null;
+      const fullscreenButtons = Array.from(document.querySelectorAll("[data-fullscreen-target]"));
       const shareButton = document.querySelector("[data-share-button]");
       const shareButtonLabel = shareButton ? shareButton.querySelector("[data-share-label]") : null;
+      const shareToast = document.querySelector("[data-share-toast]");
+      const shareToastTitle = shareToast ? shareToast.querySelector("[data-share-toast-title]") : null;
+      const shareToastText = shareToast ? shareToast.querySelector("[data-share-toast-text]") : null;
+      const shareUndoButton = shareToast ? shareToast.querySelector("[data-share-undo]") : null;
+      const shareDismissButton = shareToast ? shareToast.querySelector("[data-share-dismiss]") : null;
       const paneToggleButtons = Array.from(document.querySelectorAll("[data-toggle-pane]"));
       const paneStateButtons = Array.from(document.querySelectorAll("[data-pane-button]"));
       const paneResizers = Array.from(document.querySelectorAll("[data-resizer]"));
@@ -1301,6 +1326,7 @@
         orbX: null,
         orbY: null,
         orbMoved: false,
+        settingsWidth: 560,
       };
       let layoutState = loadLayoutState();
       let collapsibleState = loadCollapsibleState();
@@ -1353,28 +1379,55 @@
         }
       }
 
-      function setShareButtonFeedback(label, active = true) {
-        if (!shareButton) return;
+      let shareRestoreText = null;
+
+      function hideShareToast() {
+        if (!shareToast) return;
+        shareToast.hidden = true;
+        shareToast.classList.remove("is-visible");
+        shareRestoreText = null;
+        if (shareUndoButton) shareUndoButton.hidden = true;
+        if (shareFeedbackTimer) {
+          window.clearTimeout(shareFeedbackTimer);
+          shareFeedbackTimer = null;
+        }
+        if (shareButton) {
+          shareButton.classList.remove("is-accent");
+          shareButton.setAttribute("title", "分享论文");
+          shareButton.setAttribute("aria-label", "分享论文");
+        }
+        if (shareButtonLabel) shareButtonLabel.textContent = "分享论文";
+      }
+
+      function showShareToast(title, text, { active = true, undo = false, timeout = 2600 } = {}) {
+        if (!shareButton || !shareToast) return;
         if (shareFeedbackTimer) {
           window.clearTimeout(shareFeedbackTimer);
           shareFeedbackTimer = null;
         }
         shareButton.classList.toggle("is-accent", active);
-        shareButton.setAttribute("title", label);
-        shareButton.setAttribute("aria-label", label);
-        if (shareButtonLabel) {
-          shareButtonLabel.textContent = label;
+        shareButton.setAttribute("title", title);
+        shareButton.setAttribute("aria-label", title);
+        if (shareButtonLabel) shareButtonLabel.textContent = title;
+        if (shareToastTitle) shareToastTitle.textContent = title;
+        if (shareToastText) shareToastText.textContent = text;
+        if (shareUndoButton) shareUndoButton.hidden = !undo;
+        shareToast.hidden = false;
+        shareToast.classList.add("is-visible");
+        if (timeout > 0) {
+          shareFeedbackTimer = window.setTimeout(() => {
+            hideShareToast();
+          }, timeout);
         }
-        shareFeedbackTimer = window.setTimeout(() => {
-          if (!shareButton) return;
-          shareButton.classList.remove("is-accent");
-          shareButton.setAttribute("title", "分享论文");
-          shareButton.setAttribute("aria-label", "分享论文");
-          if (shareButtonLabel) {
-            shareButtonLabel.textContent = "分享论文";
-          }
-          shareFeedbackTimer = null;
-        }, 2200);
+      }
+
+      async function readClipboardText() {
+        if (!navigator.clipboard || !window.isSecureContext || !navigator.clipboard.readText) return null;
+        try {
+          return await navigator.clipboard.readText();
+        } catch (error) {
+          return null;
+        }
       }
 
       async function copyText(text) {
@@ -1411,7 +1464,7 @@
                 text: shareText,
                 url: shareUrl,
               });
-              setShareButtonFeedback("已打开分享面板");
+              showShareToast("已打开分享面板", "如果你取消分享，不会修改剪贴板。", { active: true, undo: false, timeout: 2200 });
               return;
             } catch (error) {
               if (error && error.name === "AbortError") {
@@ -1419,10 +1472,11 @@
               }
             }
           }
+          shareRestoreText = await readClipboardText();
           await copyText(shareText || shareUrl);
-          setShareButtonFeedback("已复制分享文案");
+          showShareToast("分享文案已复制", shareRestoreText === null ? "可以直接粘贴发送。当前环境不支持恢复旧剪贴板。" : "可以直接粘贴发送。点错可撤销。", { active: true, undo: shareRestoreText !== null, timeout: 3600 });
         } catch (error) {
-          setShareButtonFeedback("复制失败，请重试", false);
+          showShareToast("复制失败，请重试", "浏览器没有完成复制动作。", { active: false, undo: false, timeout: 2600 });
         }
       }
 
@@ -1498,9 +1552,15 @@
           settingsOrb.setAttribute("aria-expanded", layoutState.settingsOpen ? "true" : "false");
         }
         if (settingsDrawer) {
+          settingsDrawer.style.setProperty("--settings-drawer-width", `${layoutState.settingsWidth || 560}px`);
           settingsDrawer.toggleAttribute("inert", !layoutState.settingsOpen);
           settingsDrawer.setAttribute("aria-hidden", layoutState.settingsOpen ? "false" : "true");
         }
+        const layoutRect = layoutRoot.getBoundingClientRect();
+        document.documentElement.style.setProperty("--expanded-reader-top", `${Math.round(layoutRect.top)}px`);
+        document.documentElement.style.setProperty("--expanded-reader-left", `${Math.round(layoutRect.left)}px`);
+        document.documentElement.style.setProperty("--expanded-reader-width", `${Math.round(layoutRect.width)}px`);
+        document.documentElement.style.setProperty("--expanded-reader-height", `${Math.round(layoutRect.height)}px`);
         syncPaneRegions();
         syncPaneButtons();
         applyOrbPosition();
@@ -1616,6 +1676,45 @@
       if (closeSettingsButton) {
         closeSettingsButton.addEventListener("click", () => setSettingsOpen(false));
       }
+
+      if (settingsResizeHandle && settingsDrawer) {
+        settingsResizeHandle.addEventListener("pointerdown", (event) => {
+          if (event.button !== 0) return;
+          event.preventDefault();
+          const startX = event.clientX;
+          const startWidth = settingsDrawer.getBoundingClientRect().width;
+          settingsResizeHandle.setPointerCapture(event.pointerId);
+          settingsDrawer.classList.add("is-resizing");
+
+          function onMove(moveEvent) {
+            const maxWidth = Math.min(window.innerWidth - 28, 920);
+            layoutState.settingsWidth = clamp(startWidth + (startX - moveEvent.clientX), 420, maxWidth);
+            applyLayoutState();
+          }
+
+          function onUp() {
+            settingsDrawer.classList.remove("is-resizing");
+            window.removeEventListener("pointermove", onMove);
+            window.removeEventListener("pointerup", onUp);
+            persistLayoutState();
+          }
+
+          window.addEventListener("pointermove", onMove);
+          window.addEventListener("pointerup", onUp, { once: true });
+        });
+      }
+
+      fullscreenButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          const key = button.dataset.fullscreenTarget || "";
+          const target = document.querySelector(`[data-reader-fullscreen="${CSS.escape(key)}"]`);
+          if (!target) return;
+          const expanded = target.classList.toggle("is-reader-expanded");
+          document.body.classList.toggle("reader-expanded", expanded);
+          button.textContent = expanded ? "退出放大" : "全屏阅读";
+          button.setAttribute("aria-pressed", expanded ? "true" : "false");
+        });
+      });
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && layoutState.settingsOpen) {
           setSettingsOpen(false);
@@ -1672,8 +1771,29 @@
       applyLayoutState();
       if (shareButton) {
         shareButton.addEventListener("click", () => {
-          handleShareClick();
+          handleShareClick().catch(() => {
+            showShareToast("复制失败，请重试", "浏览器没有完成复制动作。", { active: false, undo: false, timeout: 2600 });
+          });
         });
+      }
+
+      if (shareUndoButton) {
+        shareUndoButton.addEventListener("click", async () => {
+          if (shareRestoreText === null) {
+            hideShareToast();
+            return;
+          }
+          try {
+            await copyText(shareRestoreText);
+            showShareToast("已撤销复制", "剪贴板已恢复到点击分享前的内容。", { active: false, undo: false, timeout: 2200 });
+          } catch (error) {
+            showShareToast("撤销失败", "浏览器没有完成剪贴板恢复。", { active: false, undo: false, timeout: 2400 });
+          }
+        });
+      }
+
+      if (shareDismissButton) {
+        shareDismissButton.addEventListener("click", () => hideShareToast());
       }
 
       function escapeHtml(value) {
@@ -1750,24 +1870,29 @@
       }
 
       function renderActionCard(action) {
+        const openAttr = ["queued", "running"].includes(action.status) ? " open" : "";
         return `
-          <article class="job-card ${action.status}">
-            <div class="job-card-top">
-              <div>
-                <strong>${escapeHtml(action.title || action.kind || "后台任务")}</strong>
-                <span>${escapeHtml(action.requested_by_display_name || "")}</span>
+          <details class="job-card action-job-card ${action.status}"${openAttr}>
+            <summary class="job-card-summary">
+              <div class="job-card-top">
+                <div>
+                  <strong>${escapeHtml(action.title || action.kind || "后台任务")}</strong>
+                  <span>${escapeHtml(action.requested_by_display_name || "")}</span>
+                </div>
+                <span class="job-status">${escapeHtml(statusLabel(action.status))}</span>
               </div>
-              <span class="job-status">${escapeHtml(statusLabel(action.status))}</span>
+              <div class="job-progress"><span style="width: ${Number(action.progress || 0)}%"></span></div>
+              <div class="job-meta">
+                <span>${Number(action.progress || 0)}%</span>
+                <span>${escapeHtml(action.updated_at || "")}</span>
+              </div>
+            </summary>
+            <div class="action-job-body">
+              <p class="job-message">${escapeHtml(action.message || "")}</p>
+              ${action.error ? `<p class="job-error">${escapeHtml(action.error)}</p>` : ""}
+              ${renderActionResultDetails(action)}
             </div>
-            <div class="job-progress"><span style="width: ${Number(action.progress || 0)}%"></span></div>
-            <div class="job-meta">
-              <span>${Number(action.progress || 0)}%</span>
-              <span>${escapeHtml(action.updated_at || "")}</span>
-            </div>
-            <p class="job-message">${escapeHtml(action.message || "")}</p>
-            ${action.error ? `<p class="job-error">${escapeHtml(action.error)}</p>` : ""}
-            ${renderActionResultDetails(action)}
-          </article>
+          </details>
         `;
       }
 
@@ -2599,11 +2724,16 @@
 
       document.querySelectorAll(".tool-panel").forEach((details) => {
         details.addEventListener("toggle", () => {
-          if (details.open) {
-            loadLazyPanel(details).catch((error) => {
-              console.error("Panel toggle load failed", error);
-            });
-          }
+          if (!details.open) return;
+          document.querySelectorAll(".tool-panel[open]").forEach((other) => {
+            if (other !== details) other.open = false;
+          });
+          requestAnimationFrame(() => {
+            details.scrollIntoView({ block: "start", behavior: "smooth" });
+          });
+          loadLazyPanel(details).catch((error) => {
+            console.error("Panel toggle load failed", error);
+          });
         });
       });
 

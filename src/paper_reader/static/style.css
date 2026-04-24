@@ -288,11 +288,11 @@ main {
 }
 
 .insights-progress-bar-momentum span {
-  background: linear-gradient(90deg, #0f766e, #34d399);
+  background: linear-gradient(90deg, #2563eb, #38bdf8);
 }
 
 .insights-progress-bar-opportunity span {
-  background: linear-gradient(90deg, #b45309, #f59e0b);
+  background: linear-gradient(90deg, #475569, #94a3b8);
 }
 
 .insights-progress-meta {
@@ -355,14 +355,14 @@ main {
 
 .insights-momentum-head {
   background:
-    radial-gradient(circle at top left, rgba(16, 185, 129, 0.1), transparent 30%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(247, 255, 252, 0.98));
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.10), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 255, 0.98));
 }
 
 .insights-opportunity-head {
   background:
-    radial-gradient(circle at top left, rgba(245, 158, 11, 0.12), transparent 30%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(255, 250, 240, 0.98));
+    radial-gradient(circle at top left, rgba(71, 85, 105, 0.10), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
 }
 
 .insights-theme-card {
@@ -518,8 +518,8 @@ main {
   gap: 12px;
   border-radius: 18px;
   background:
-    radial-gradient(circle at top left, rgba(16, 185, 129, 0.09), transparent 28%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(244, 255, 250, 0.98));
+    radial-gradient(circle at top left, rgba(37, 99, 235, 0.09), transparent 28%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 251, 255, 0.98));
   padding: 14px;
 }
 
@@ -575,8 +575,8 @@ main {
   gap: 12px;
   border-radius: 18px;
   background:
-    radial-gradient(circle at top left, rgba(245, 158, 11, 0.08), transparent 30%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(255, 252, 245, 0.98));
+    radial-gradient(circle at top left, rgba(71, 85, 105, 0.08), transparent 30%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(248, 250, 252, 0.98));
   padding: 14px;
 }
 
@@ -3605,5 +3605,1293 @@ body.settings-open .settings-drawer {
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.001ms !important;
+  }
+}
+
+/* UI scale system: compact controls, Chinese UI hierarchy, reader-first prose. */
+:root {
+  --font-ui: "Noto Sans SC", "Source Han Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", serif;
+  --font-body: 0.875rem;
+  --font-title: 1rem;
+  --font-meta: 0.75rem;
+  --font-micro: 0.6875rem;
+  --control-height: 34px;
+  --control-height-sm: 30px;
+  --control-pad-x: 11px;
+  --radius-control: 12px;
+  --radius-panel: 18px;
+}
+
+body {
+  font-size: var(--font-body);
+  line-height: 1.55;
+}
+
+.hero h1,
+.hero h1 a,
+.sidebar-head h2,
+.viewer-head h2,
+.tools-head h2,
+.pane-top h2,
+.viewer-toolbar h2,
+.sources-head h2,
+.prompt-card-head strong,
+.batch-head strong,
+.check-card strong,
+.team-paper-card-head strong,
+.activity-section-head strong,
+.insights-status-card strong,
+.insights-theme-card h3,
+.insights-panel h4 {
+  font-family: var(--font-ui);
+  letter-spacing: -0.015em;
+}
+
+.hero {
+  min-height: 62px;
+  padding: 9px 14px;
+}
+
+.hero-compact {
+  min-height: 62px;
+}
+
+.app-logo {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+}
+
+.hero-copy,
+.sidebar-copy,
+.viewer-subtitle,
+.paper-row-file,
+.paper-row-folder,
+.paper-row-date,
+.meta-label,
+.flash,
+label span,
+.eyebrow,
+.tool-hint,
+.viewer-meta,
+.compact-empty p,
+.text-viewer-intro span,
+.empty-inline,
+.paper-row-summary,
+.viewer-tab small,
+.prompt-card-head span,
+.prompt-card-meta,
+.batch-head span,
+.check-card span,
+.prompt-viewer-head span,
+.checkbox-line,
+.team-paper-card-head span,
+.team-note-item small,
+.team-chat-message small,
+.team-comment-item small,
+.team-tag-chip small,
+.recommendation-feed-meta span,
+.recommendation-feed-item p,
+.team-empty-copy,
+.source-day-metrics span,
+.source-paper-stats span,
+.source-paper-meta span,
+.source-paper-check span,
+.source-paper-id,
+.job-card-top span,
+.job-meta,
+.job-message,
+.job-result,
+.job-error,
+.activity-item-head small {
+  font-size: var(--font-meta);
+  line-height: 1.42;
+}
+
+.eyebrow,
+.viewer-meta-pill small,
+.activity-stat-card small,
+.insights-phase-label {
+  font-size: var(--font-micro);
+  letter-spacing: 0.08em;
+}
+
+button,
+.button-link,
+input,
+select {
+  min-height: var(--control-height);
+}
+
+button,
+.button-link {
+  padding: 7px var(--control-pad-x);
+  border-radius: var(--radius-control);
+  font-size: 0.8125rem;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.mini-action,
+.batch-toggle-line,
+.batch-select-all-toggle,
+.collapsible-toggle,
+.compact-tag-toggle,
+.add-tag-chip,
+.compact-tag-chip,
+.team-tag-chip,
+.viewer-status-pill,
+.viewer-meta-inline span,
+.recommendation-feed-meta span,
+.paper-row-type,
+.paper-row-folder,
+.paper-row-summary,
+.paper-row-done {
+  min-height: var(--control-height-sm);
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: var(--font-meta);
+  line-height: 1.15;
+}
+
+.icon-button {
+  min-width: 36px;
+  min-height: 36px;
+  padding: 8px 10px;
+}
+
+.icon-button .icon-shell,
+.icon-button .icon-shell svg {
+  width: 16px;
+  height: 16px;
+}
+
+.workspace-orbit-dock {
+  gap: 6px;
+  padding: 6px 8px;
+}
+
+.workspace-dock-button {
+  width: 38px;
+  height: 38px;
+  min-width: 38px;
+  min-height: 38px;
+}
+
+.workspace-recommend-button {
+  min-width: 58px;
+  padding: 0 11px;
+}
+
+.settings-orb {
+  width: 52px;
+  height: 52px;
+}
+
+.settings-orb img {
+  width: 30px;
+  height: 30px;
+}
+
+input,
+select,
+textarea {
+  padding: 8px 11px;
+  border-radius: var(--radius-control);
+  font-size: 0.8125rem;
+}
+
+textarea {
+  min-height: 96px;
+  line-height: 1.55;
+}
+
+.team-inline-form textarea {
+  min-height: 76px;
+}
+
+.team-chat-card textarea {
+  min-height: 92px;
+}
+
+.tool-actions,
+.split-actions,
+.prompt-viewer-actions,
+.viewer-tag-actions,
+.batch-head-actions,
+.insights-head-actions,
+.sources-head-actions,
+.jobs-control-actions,
+.drawer-quick-actions {
+  gap: 7px;
+}
+
+.workspace-shell.tri-workspace {
+  --left-pane-width: 272px;
+  --right-pane-width: 376px;
+  height: clamp(720px, calc(100dvh - 108px), 92dvh);
+}
+
+.layout-pane,
+.card,
+.assistant-inline-note,
+.assistant-card,
+.assistant-empty,
+.prompt-card,
+.team-paper-card,
+.team-discussion-card,
+.source-viewer,
+.text-viewer,
+.prompt-viewer,
+.markdown-viewer {
+  border-radius: var(--radius-panel);
+}
+
+.pane-left,
+.pane-center,
+.pane-right,
+.viewer-pane,
+.sidebar-pane {
+  padding: 10px;
+}
+
+.pane-top,
+.viewer-toolbar {
+  gap: 10px;
+}
+
+.viewer-toolbar {
+  padding: 5px 6px 9px;
+}
+
+.viewer-toolbar-copy h2,
+.viewer-head h2 {
+  font-size: 0.98rem;
+  line-height: 1.25;
+  font-weight: 700;
+}
+
+.viewer-meta-grid {
+  grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  gap: 7px;
+}
+
+.viewer-meta-pill {
+  padding: 7px 9px;
+  border-radius: 13px;
+}
+
+.viewer-meta-pill strong {
+  font-size: 0.8125rem;
+  line-height: 1.28;
+}
+
+.viewer-tabs {
+  gap: 6px;
+  margin-bottom: 7px;
+}
+
+.viewer-tab {
+  min-width: 78px;
+  padding: 7px 9px;
+  border-radius: 13px;
+  font-size: 0.75rem;
+}
+
+.paper-year-group,
+.paper-month-group,
+.paper-row,
+.recommendation-feed-item,
+.team-note-item,
+.team-comment-item,
+.team-chat-message,
+.activity-item-card,
+.job-card,
+.check-card,
+.source-paper-card,
+.docx-preview p {
+  border-radius: 14px;
+}
+
+.paper-row {
+  gap: 5px;
+  padding: 8px 9px;
+}
+
+.paper-row-title {
+  font-size: 0.75rem;
+  line-height: 1.28;
+  font-weight: 650;
+}
+
+.paper-row-file,
+.paper-row-folder,
+.paper-row-date,
+.paper-row-summary,
+.paper-row-done {
+  font-size: var(--font-micro);
+}
+
+.sidebar-recommendation-feed {
+  min-height: 420px;
+  max-height: min(62vh, 700px);
+}
+
+.recommendation-feed-item {
+  padding: 9px 10px;
+}
+
+.recommendation-feed-title {
+  font-size: 0.8125rem;
+  line-height: 1.32;
+  font-weight: 650;
+}
+
+.assistant-switch-row {
+  gap: 7px;
+}
+
+.assistant-switch-button {
+  min-height: var(--control-height-sm);
+  padding: 6px 10px;
+  font-size: 0.75rem;
+}
+
+.assistant-card,
+.team-paper-card,
+.team-discussion-card {
+  padding: 12px;
+}
+
+.team-chat-thread {
+  gap: 8px;
+}
+
+.team-chat-message,
+.team-note-item,
+.team-comment-item,
+.activity-item-card {
+  padding: 9px 10px;
+}
+
+.team-chat-body,
+.activity-item-card p,
+.team-note-item p,
+.team-comment-item p,
+.team-comment-reply p {
+  font-size: 0.8125rem;
+  line-height: 1.58;
+}
+
+.activity-summary-strip {
+  gap: 7px;
+}
+
+.activity-stat-card {
+  padding: 8px 9px;
+  border-radius: 13px;
+}
+
+.activity-stat-card strong {
+  font-size: 0.95rem;
+}
+
+.activity-section {
+  gap: 8px;
+  padding-top: 9px;
+}
+
+.team-admin-stack,
+.stacked-tool-grid,
+.prompt-manager-grid,
+.batch-form,
+.job-dashboard,
+.sources-shell,
+.insights-shell {
+  gap: 10px;
+}
+
+.team-admin-create-card {
+  position: sticky;
+  top: 8px;
+}
+
+.team-admin-create-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.team-admin-create-form {
+  gap: 8px;
+}
+
+.team-admin-head-actions {
+  gap: 8px;
+}
+
+.team-admin-search-input {
+  min-width: min(320px, 100%);
+}
+
+.team-admin-user-list {
+  max-height: min(58vh, 680px);
+}
+
+.team-user-form {
+  padding: 10px;
+}
+
+.prompt-card {
+  gap: 10px;
+  padding: 12px;
+}
+
+.prompt-card-head {
+  gap: 10px;
+}
+
+.prompt-card-head strong {
+  font-size: 0.875rem;
+  line-height: 1.35;
+}
+
+.tool-grid {
+  gap: 10px;
+}
+
+.job-summary-strip,
+.upload-stat-strip {
+  gap: 8px;
+}
+
+.job-summary-card,
+.library-box,
+.summary-box,
+.upload-visualizer,
+.inline-job-card,
+.lazy-panel-hint,
+.lazy-panel-loading,
+.lazy-panel-error {
+  border-radius: 14px;
+}
+
+.markdown-viewer {
+  padding: 18px 20px;
+  font-family: var(--font-serif);
+  font-size: 0.9375rem;
+  line-height: 1.86;
+}
+
+.markdown-render h1,
+.markdown-render h2,
+.markdown-render h3,
+.markdown-render h4,
+.markdown-render h5,
+.markdown-render h6 {
+  font-family: var(--font-ui);
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+}
+
+.markdown-render h1 { font-size: 1.5rem; }
+.markdown-render h2 { font-size: 1.25rem; }
+.markdown-render h3 { font-size: 1.0625rem; }
+.markdown-render h4 { font-size: 0.98rem; }
+
+.markdown-render p,
+.markdown-render ul,
+.markdown-render ol,
+.markdown-render blockquote,
+.markdown-render pre {
+  margin-bottom: 0.95em;
+}
+
+.markdown-render code,
+.markdown-render pre,
+.markdown-render pre code,
+.team-chat-body code {
+  font-family: "SFMono-Regular", "Menlo", "Consolas", monospace;
+}
+
+@media (max-width: 1300px) {
+  .workspace-shell.tri-workspace {
+    --left-pane-width: 248px;
+    --right-pane-width: 340px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .workspace-shell.tri-workspace {
+    --left-pane-width: 220px;
+    --right-pane-width: 308px;
+  }
+}
+
+@media (max-width: 820px) {
+  button,
+  .button-link,
+  input,
+  select {
+    min-height: 36px;
+  }
+  .team-admin-create-grid {
+    grid-template-columns: 1fr;
+  }
+  .markdown-viewer {
+    padding: 12px;
+    font-size: 0.9rem;
+    line-height: 1.72;
+  }
+}
+
+/* Priority pass: make core reading dominant and collapse secondary controls. */
+.viewer-toolbar-main {
+  gap: 7px;
+}
+
+.viewer-tabs-inline {
+  flex-wrap: wrap;
+}
+
+.viewer-tab {
+  min-height: 38px;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 92px;
+  padding: 6px 10px;
+}
+
+.viewer-tab small {
+  margin-left: 2px;
+  color: var(--brand-deep);
+  font-size: 0.68rem;
+  line-height: 1;
+}
+
+.viewer-tab.active small {
+  color: var(--brand-deep);
+}
+
+.prompt-viewer-wide {
+  gap: 8px;
+}
+
+.prompt-viewer-head-compact {
+  padding: 0 2px 6px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.prompt-viewer-head-compact strong {
+  font-size: 0.92rem;
+}
+
+.prompt-viewer-head-compact span {
+  font-size: 0.68rem;
+}
+
+.prompt-viewer-actions-compact {
+  gap: 5px;
+}
+
+.prompt-viewer-actions-compact .button-link,
+.prompt-viewer-actions-compact button {
+  min-height: 28px;
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+}
+
+.reader-fullscreen-button {
+  background: rgba(29, 78, 216, 0.12);
+  border-color: rgba(29, 78, 216, 0.22);
+  color: var(--brand-deep);
+}
+
+.reader-mini-link {
+  opacity: 0.82;
+}
+
+.prompt-viewer:fullscreen,
+.prompt-viewer.is-fullscreen-fallback {
+  width: 100vw;
+  height: 100vh;
+  max-height: none;
+  padding: 18px;
+  border: 0;
+  border-radius: 0;
+  background: #f8fbff;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.prompt-viewer:fullscreen .markdown-viewer,
+.prompt-viewer.is-fullscreen-fallback .markdown-viewer {
+  max-width: 980px;
+  width: min(980px, 100%);
+  margin: 0 auto;
+  overflow: auto;
+  font-size: 1.02rem;
+  line-height: 1.9;
+  padding: 28px 34px;
+}
+
+.prompt-viewer:fullscreen .prompt-viewer-head,
+.prompt-viewer.is-fullscreen-fallback .prompt-viewer-head {
+  max-width: 980px;
+  width: min(980px, 100%);
+  margin: 0 auto;
+}
+
+.settings-drawer {
+  width: min(var(--settings-drawer-width, 560px), calc(100vw - 36px));
+}
+
+.settings-resize-handle {
+  position: absolute;
+  left: -7px;
+  top: 86px;
+  bottom: 18px;
+  width: 14px;
+  min-height: 120px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  cursor: ew-resize;
+  box-shadow: none;
+  z-index: 3;
+}
+
+.settings-resize-handle::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 5px;
+  width: 4px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.08), rgba(29, 78, 216, 0.36), rgba(15, 23, 42, 0.08));
+}
+
+.settings-resize-handle:hover::before,
+.settings-drawer.is-resizing .settings-resize-handle::before {
+  background: linear-gradient(180deg, rgba(29, 78, 216, 0.18), rgba(29, 78, 216, 0.58), rgba(29, 78, 216, 0.18));
+}
+
+.settings-user-card {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+}
+
+.settings-user-actions {
+  grid-column: 1 / -1;
+  display: block;
+}
+
+.settings-avatar-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  justify-items: stretch;
+}
+
+.settings-avatar-picker {
+  justify-items: stretch;
+}
+
+.settings-avatar-picker input {
+  width: 100%;
+}
+
+.settings-logout-link {
+  display: inline-flex;
+  width: fit-content;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: var(--font-meta);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.action-job-card {
+  padding: 0;
+}
+
+.action-job-card > summary {
+  list-style: none;
+  cursor: pointer;
+}
+
+.action-job-card > summary::-webkit-details-marker {
+  display: none;
+}
+
+.job-card-summary {
+  display: grid;
+  gap: 8px;
+  padding: 12px 14px;
+}
+
+.action-job-body {
+  display: grid;
+  gap: 8px;
+  padding: 0 14px 12px;
+}
+
+.action-job-card:not([open]) .job-card-summary {
+  padding-bottom: 12px;
+}
+
+.action-history-details .action-job-card:not([open]) .job-progress,
+.action-history-details .action-job-card:not([open]) .job-meta {
+  display: none;
+}
+
+.lazy-panel-body .batch-grid {
+  grid-template-columns: 1fr;
+}
+
+.lazy-panel-body .batch-column {
+  min-width: 0;
+}
+
+@media (max-width: 820px) {
+  .settings-resize-handle {
+    display: none;
+  }
+  .viewer-tab {
+    min-width: 84px;
+    min-height: 36px;
+  }
+  .prompt-viewer-head-compact {
+    align-items: flex-start;
+  }
+  .prompt-viewer-actions-compact {
+    width: 100%;
+  }
+  .settings-avatar-form {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Settings profile: two-column account block. */
+.settings-user-card {
+  grid-template-columns: auto minmax(0, 1fr) minmax(220px, 0.92fr);
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-user-actions {
+  grid-column: auto;
+  display: block;
+  justify-self: stretch;
+}
+
+.settings-avatar-form {
+  grid-template-columns: 1fr;
+  align-items: stretch;
+  gap: 7px;
+  justify-items: stretch;
+}
+
+.settings-avatar-form button {
+  width: 100%;
+}
+
+.settings-avatar-picker {
+  justify-items: stretch;
+  gap: 5px;
+}
+
+.settings-avatar-picker input {
+  width: 100%;
+  min-height: 34px;
+}
+
+.settings-logout-link {
+  margin-top: 7px;
+}
+
+@media (max-width: 640px) {
+  .settings-user-card {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .settings-user-actions {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Reader expanded mode stays inside the app instead of browser fullscreen. */
+body.reader-expanded {
+  overflow: hidden;
+}
+
+body.reader-expanded .pane-left,
+body.reader-expanded .pane-right,
+body.reader-expanded .pane-resizer,
+body.reader-expanded .workspace-orbit-dock,
+body.reader-expanded .settings-orb {
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.reader-expanded .pane-center {
+  position: fixed;
+  z-index: 80;
+  inset: 84px 10px 10px;
+  width: auto;
+  height: auto;
+  max-height: none;
+  padding: 12px;
+  border-radius: 22px;
+  box-shadow: var(--shadow-lg);
+}
+
+body.reader-expanded .viewer-toolbar,
+body.reader-expanded .viewer-context-panel,
+body.reader-expanded .viewer-inline-tags-panel,
+body.reader-expanded .viewer-tag-editor,
+body.reader-expanded .viewer-tabs {
+  display: none;
+}
+
+body.reader-expanded .reader-stage {
+  padding-top: 0;
+}
+
+.prompt-viewer.is-reader-expanded {
+  height: 100%;
+  min-height: 0;
+  padding: 14px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: rgba(248, 251, 255, 0.98);
+}
+
+.prompt-viewer.is-reader-expanded .prompt-viewer-head {
+  width: min(1060px, 100%);
+  margin: 0 auto 8px;
+}
+
+.prompt-viewer.is-reader-expanded .markdown-viewer {
+  width: min(1060px, 100%);
+  max-width: 1060px;
+  height: 100%;
+  margin: 0 auto;
+  overflow: auto;
+  padding: 22px 28px;
+}
+
+/* Markdown screen-reading font: sans-serif, slightly denser. */
+.markdown-viewer {
+  font-family: var(--font-ui);
+  font-size: 0.9rem;
+  line-height: 1.76;
+}
+
+.markdown-render h1 { font-size: 1.38rem; }
+.markdown-render h2 { font-size: 1.18rem; }
+.markdown-render h3 { font-size: 1.02rem; }
+.markdown-render h4 { font-size: 0.94rem; }
+
+.markdown-render p,
+.markdown-render ul,
+.markdown-render ol,
+.markdown-render blockquote,
+.markdown-render pre {
+  margin-bottom: 0.82em;
+}
+
+.markdown-render li + li {
+  margin-top: 0.22em;
+}
+
+/* Settings drawer density fixes. */
+.settings-drawer .job-dashboard {
+  gap: 12px;
+}
+
+.settings-drawer .job-card {
+  padding: 0;
+  overflow: hidden;
+  border-radius: 16px;
+}
+
+.settings-drawer .job-card-summary {
+  padding: 14px 16px;
+}
+
+.settings-drawer .action-job-body {
+  padding: 0 16px 14px;
+}
+
+.settings-drawer .job-card-top {
+  align-items: flex-start;
+}
+
+.settings-drawer .job-card-top > div {
+  min-width: 0;
+}
+
+.settings-drawer .job-card-top strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.settings-drawer .job-status {
+  flex: 0 0 auto;
+  margin-left: 8px;
+}
+
+.settings-drawer .job-progress {
+  margin: 2px 0;
+}
+
+.settings-drawer .job-summary-card {
+  padding: 13px 15px;
+}
+
+.settings-drawer .action-history-details {
+  padding: 13px 15px;
+}
+
+/* Account management cards need more breathing room. */
+.team-admin-user-list {
+  display: grid;
+  gap: 10px;
+}
+
+.team-user-card {
+  border-radius: 16px;
+}
+
+.team-user-card summary {
+  padding: 14px 16px;
+}
+
+.team-user-head {
+  gap: 12px;
+}
+
+.team-user-head .avatar,
+.team-user-head > .avatar {
+  margin-left: 2px;
+}
+
+.team-user-head .prompt-card-meta {
+  justify-content: flex-end;
+  gap: 7px;
+  padding-right: 2px;
+}
+
+.team-user-card .team-user-form {
+  margin: 0 16px 16px;
+  padding: 12px;
+}
+
+@media (max-width: 820px) {
+  body.reader-expanded .pane-center {
+    inset: 70px 6px 6px;
+    padding: 8px;
+  }
+  .prompt-viewer.is-reader-expanded .markdown-viewer {
+    padding: 14px;
+    font-size: 0.88rem;
+    line-height: 1.68;
+  }
+}
+
+/* Prompt processing cards in the settings drawer need the same readable spacing as import jobs. */
+.settings-drawer #job-dashboard .job-card:not(.action-job-card) {
+  padding: 14px 16px;
+}
+
+.settings-drawer #job-dashboard .job-card:not(.action-job-card) .job-card-top {
+  gap: 12px;
+  padding: 0;
+}
+
+.settings-drawer #job-dashboard .job-card:not(.action-job-card) .job-card-top strong {
+  line-height: 1.35;
+}
+
+.settings-drawer #job-dashboard .job-card:not(.action-job-card) .job-progress {
+  margin: 4px 0 2px;
+}
+
+.settings-drawer #job-dashboard .job-card:not(.action-job-card) .job-meta {
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.settings-drawer #job-dashboard .job-card:not(.action-job-card) .job-message,
+.settings-drawer #job-dashboard .job-card:not(.action-job-card) .job-result,
+.settings-drawer #job-dashboard .job-card:not(.action-job-card) .job-error {
+  margin-top: 2px;
+  line-height: 1.48;
+}
+
+/* File management forms: align action buttons and normalize box sizes. */
+.settings-drawer .tool-panel .tool-grid,
+.settings-drawer .tool-panel .danger-grid,
+.settings-drawer .tool-panel .compact-actions-grid {
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+}
+
+.settings-drawer .tool-panel .tool-grid > label,
+.settings-drawer .tool-panel .tool-grid > .library-box,
+.settings-drawer .tool-panel .tool-grid > .tool-hint,
+.settings-drawer .tool-panel .danger-grid > .library-box,
+.settings-drawer .tool-panel .danger-grid > .tool-hint,
+.settings-drawer .tool-panel .compact-actions-grid > .tool-hint {
+  min-height: 0;
+}
+
+.settings-drawer .tool-panel .tool-grid .tool-actions,
+.settings-drawer .tool-panel .danger-grid .tool-actions,
+.settings-drawer .tool-panel .compact-actions-grid .tool-actions {
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.settings-drawer .tool-panel .tool-grid .tool-actions button,
+.settings-drawer .tool-panel .danger-grid .tool-actions button,
+.settings-drawer .tool-panel .compact-actions-grid .tool-actions button {
+  min-width: 128px;
+}
+
+.settings-drawer .tool-panel .library-box,
+.settings-drawer .tool-panel .summary-box,
+.settings-drawer .tool-panel .danger-box {
+  padding: 12px 14px;
+  min-height: 58px;
+}
+
+.settings-drawer .tool-panel input[readonly] {
+  color: var(--muted);
+  background: rgba(248, 250, 252, 0.92);
+}
+
+/* Expanded reader should consume the vertical workspace, not leave a blank header gap. */
+body.reader-expanded .pane-center {
+  inset: 10px;
+}
+
+body.reader-expanded .hero {
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.reader-expanded .prompt-viewer.is-reader-expanded {
+  padding-top: 12px;
+}
+
+body.reader-expanded .prompt-viewer.is-reader-expanded .prompt-viewer-head {
+  margin-bottom: 6px;
+}
+
+@media (max-width: 820px) {
+  body.reader-expanded .pane-center {
+    inset: 6px;
+  }
+}
+
+body.reader-expanded .page-shell {
+  padding-top: 0;
+}
+
+body.reader-expanded main {
+  margin-top: 0;
+}
+
+body.reader-expanded .hero {
+  display: none;
+}
+
+body.reader-expanded .pane-center {
+  inset: 4px 10px 10px;
+}
+
+body.reader-expanded .prompt-viewer.is-reader-expanded {
+  padding-top: 8px;
+}
+
+@media (max-width: 820px) {
+  body.reader-expanded .pane-center {
+    inset: 4px 6px 6px;
+  }
+}
+
+/* Source document uses the same in-app expanded reader mode. */
+.source-viewer.is-reader-expanded {
+  height: 100%;
+  min-height: 0;
+  padding: 14px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: rgba(248, 251, 255, 0.98);
+}
+
+.source-viewer.is-reader-expanded .source-viewer-head {
+  width: min(1180px, 100%);
+  margin: 0 auto 8px;
+  padding: 0 2px 6px;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.source-viewer.is-reader-expanded .main-viewer,
+.source-viewer.is-reader-expanded .source-viewer-body {
+  width: min(1180px, 100%);
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+}
+
+.source-viewer.is-reader-expanded .main-viewer {
+  border-radius: 16px;
+}
+
+/* Auth pages should not expose app navigation affordances. */
+.auth-shell ~ .hero-nav,
+.auth-shell .hero-nav {
+  display: none;
+}
+
+/* Hover clipping: tabs stay inside the stacking context instead of moving upward. */
+.viewer-toolbar,
+.viewer-tabs,
+.viewer-tabs-inline {
+  overflow: visible;
+}
+
+.viewer-tab:hover {
+  transform: none;
+}
+
+/* Share feedback: visible toast with optional undo. */
+.share-toast {
+  position: fixed;
+  right: 22px;
+  bottom: 20px;
+  z-index: 90;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  width: min(420px, calc(100vw - 28px));
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(18px);
+}
+
+.share-toast-copy {
+  display: grid;
+  gap: 3px;
+}
+
+.share-toast-copy strong {
+  font-size: 0.82rem;
+  line-height: 1.25;
+}
+
+.share-toast-copy span {
+  color: var(--muted);
+  font-size: var(--font-meta);
+  line-height: 1.4;
+}
+
+.share-toast-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.share-toast-actions .button-link,
+.share-toast-actions button {
+  min-height: 30px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+}
+
+.workspace-share-button.is-accent {
+  opacity: 0.68;
+}
+
+@media (max-width: 820px) {
+  .share-toast {
+    right: 8px;
+    left: 8px;
+    bottom: 12px;
+    width: auto;
+    grid-template-columns: 1fr;
+  }
+
+  .share-toast-actions {
+    justify-content: flex-end;
+  }
+}
+
+/* Expanded reader must match the workspace footprint and keep the top title bar. */
+body.reader-expanded .pane-center {
+  top: var(--expanded-reader-top);
+  left: var(--expanded-reader-left);
+  width: var(--expanded-reader-width);
+  height: var(--expanded-reader-height);
+  inset: auto;
+  padding: 10px;
+}
+
+body.reader-expanded .hero,
+body.reader-expanded .page-shell,
+body.reader-expanded main {
+  display: revert;
+  padding-top: revert;
+  margin-top: revert;
+}
+
+body.reader-expanded .prompt-viewer.is-reader-expanded,
+body.reader-expanded .source-viewer.is-reader-expanded {
+  width: 100%;
+  max-width: none;
+  padding: 10px;
+}
+
+body.reader-expanded .prompt-viewer.is-reader-expanded .prompt-viewer-head,
+body.reader-expanded .source-viewer.is-reader-expanded .source-viewer-head,
+body.reader-expanded .prompt-viewer.is-reader-expanded .markdown-viewer,
+body.reader-expanded .source-viewer.is-reader-expanded .main-viewer,
+body.reader-expanded .source-viewer.is-reader-expanded .source-viewer-body {
+  width: 100%;
+  max-width: none;
+}
+
+body.reader-expanded .prompt-viewer.is-reader-expanded .markdown-viewer {
+  padding: 18px 22px;
+}
+
+body.reader-expanded .source-viewer.is-reader-expanded .main-viewer {
+  min-height: 100%;
+}
+
+@media (max-width: 820px) {
+  body.reader-expanded .pane-center {
+    top: var(--expanded-reader-top);
+    left: var(--expanded-reader-left);
+    width: var(--expanded-reader-width);
+    height: var(--expanded-reader-height);
+    padding: 8px;
+  }
+  body.reader-expanded .prompt-viewer.is-reader-expanded .markdown-viewer {
+    padding: 12px 14px;
   }
 }

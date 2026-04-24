@@ -8,7 +8,7 @@
     <link rel="shortcut icon" href="{{ url_for('static', filename='logo-mark.svg') }}">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700;800&family=Noto+Serif:wght@500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700;800&family=Noto+Serif+SC:wght@500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script>
       window.MathJax = {
@@ -32,10 +32,10 @@
           <img class="app-logo" src="{{ url_for('static', filename='logo-mark.svg') }}" alt="Paper Reader logo">
           <div>
             <p class="eyebrow">Paper Reader</p>
-            <h1><a href="{{ url_for('index') }}">论文阅读器</a></h1>
+            {% if session.get("user_id") %}<h1><a href="{{ url_for('index') }}">论文阅读器</a></h1>{% else %}<h1>论文阅读器</h1>{% endif %}
           </div>
         </div>
-        {% if request.endpoint != 'index' %}
+        {% if session.get("user_id") and request.endpoint != 'index' %}
           <nav class="hero-nav">
             <a class="button-link secondary" href="{{ url_for('index') }}">主阅读器</a>
             <a class="button-link secondary" href="{{ url_for('sources_index') }}">Sources</a>
