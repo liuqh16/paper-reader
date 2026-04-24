@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -15,6 +16,8 @@ MAX_CHAT_HISTORY_MESSAGES = 12
 MAX_PROMPT_CONTEXT_CHARS = 12000
 MAX_DOCUMENT_TEXT_CHARS = 48000
 MAX_CODEX_RETRIES = 5
+DEFAULT_CHAT_REASONING_EFFORT = "medium"
+CHAT_REASONING_EFFORT = (os.environ.get("PAPER_READER_CHAT_REASONING_EFFORT") or DEFAULT_CHAT_REASONING_EFFORT).strip().lower() or DEFAULT_CHAT_REASONING_EFFORT
 
 
 def _format_history(history: Sequence[dict[str, str]]) -> str:
@@ -84,6 +87,7 @@ def build_chat_prompt(
     visibility: str,
     history: Sequence[dict[str, str]],
     prompt_contexts: Sequence[tuple[str, str]],
+    arxiv_markdown_path: Path | None = None,
 ) -> str:
     mode = "Shared Chat" if visibility == "shared" else "Private Chat"
     collaboration_hint = (
@@ -91,7 +95,23 @@ def build_chat_prompt(
         if visibility == "shared"
         else "请用适合个人学习和复现的口吻回答，可以更细致地拆解思路。"
     )
-    title, extracted_text, extraction_note = _document_context(document_path)
+    if arxiv_markdown_path is not None:
+        arxiv_markdown_path = arxiv_markdown_path.resolve()
+        meta = extract_document_metadata(document_path)
+        title = str(meta.get("title") or document_path.stem).strip() or document_path.stem
+        extraction_note = "系统已经缓存了 arXiv Markdown 原文，本次问答优先基于这份 Markdown。"
+        document_section = (
+            "## 论文原文来源\n"
+            f"请优先直接阅读这个本地 arXiv Markdown 文件：`{arxiv_markdown_path}`\n"
+            f"原始论文文件：`{document_path.resolve()}`\n"
+            "只要这份 Markdown 足够完整，就不要再回退到 PDF / Word，也不要要求用户重新粘贴正文。"
+        )
+        grounding_note = "请严格基于本地 arXiv Markdown、共享 Prompt 结果和最近对话历史回答。"
+    else:
+        title, extracted_text, extraction_note = _document_context(document_path)
+        document_section = "## 论文抽取正文\n" f"{extracted_text}"
+        grounding_note = "请严格基于下面提供的论文文本、共享 Prompt 结果和最近对话历史回答。"
+
     return (
         "你是 paper-reader 里的论文问答助手。\n\n"
         f"论文标题：{title}\n"
@@ -99,11 +119,9 @@ def build_chat_prompt(
         f"当前模式：{mode}\n"
         f"{collaboration_hint}\n"
         f"{extraction_note}\n\n"
-        "请严格基于下面提供的论文文本、共享 Prompt 结果和最近对话历史回答。"
-        "不要再尝试读取文件、不要运行任何 shell 命令，也不要要求用户再粘贴论文正文。"
+        f"{grounding_note}"
         "如果资料不足，请明确指出不确定之处，不要编造论文细节。\n\n"
-        "## 论文抽取正文\n"
-        f"{extracted_text}\n\n"
+        f"{document_section}\n\n"
         "## 可复用的 Prompt 结果\n"
         f"{_format_prompt_context(prompt_contexts)}\n\n"
         "## 最近对话历史\n"
@@ -111,8 +129,16 @@ def build_chat_prompt(
         "## 当前问题\n"
         f"{question.strip()}\n\n"
         "## 回答要求\n"
+        "- 使用 Markdown 输出，优先用小标题、列表和短段落组织内容\n"
         "- 使用中文\n"
         "- 先直接回答问题，再补充依据或步骤\n"
+        "- 如果问题涉及公式、推导、损失函数、概率表达式或符号定义，必须写出关键公式，不要只做口头描述\n"
+        "- 行内公式使用 `$...$`，独立公式使用 `$$...$$`\n"
+        "- 不要用 ``` 代码块包裹数学公式，只有在展示代码时才使用代码块\n"
+        "- 写公式时尽量补一句符号含义，避免只堆公式\n"
+        "- 如果需要展示代码、伪代码、配置、命令或接口示例，必须使用三反引号代码块，并标注语言，例如 ```python```、```bash```、```json```\n"
+        "- 不要用普通段落假装代码，也不要把代码和数学公式混在同一个代码块里\n"
+        "- 如果只是引用很短的标识符、函数名、变量名或命令，使用行内代码 ``...``\n"
         "- 如果适合，给出 2-4 条下一步建议\n"
         "- 不要要求用户再粘贴论文正文\n"
     )
@@ -125,6 +151,7 @@ def answer_question_about_document(
     visibility: str,
     history: Sequence[dict[str, str]],
     prompt_contexts: Sequence[tuple[str, str]],
+    arxiv_markdown_path: Path | None = None,
     model: str = DEFAULT_MODEL,
 ) -> str:
     document_path = document_path.resolve()
@@ -141,6 +168,7 @@ def answer_question_about_document(
         visibility=visibility,
         history=history,
         prompt_contexts=prompt_contexts,
+        arxiv_markdown_path=arxiv_markdown_path,
     )
 
     last_error: RuntimeError | None = None
@@ -155,9 +183,11 @@ def answer_question_about_document(
                     "--skip-git-repo-check",
                     "--dangerously-bypass-approvals-and-sandbox",
                     "--cd",
-                    str(document_path.parent),
+                    str((arxiv_markdown_path.parent if arxiv_markdown_path is not None else document_path.parent).resolve()),
                     "--model",
                     model or DEFAULT_MODEL,
+                    "-c",
+                    f"model_reasoning_effort='{CHAT_REASONING_EFFORT}'",
                     "--output-last-message",
                     str(output_path),
                     "-",

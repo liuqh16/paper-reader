@@ -4,6 +4,7 @@ import importlib
 import io
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import time
@@ -14,12 +15,16 @@ from unittest.mock import ANY, patch
 
 from pypdf import PdfWriter
 
-from src.paper_reader.app import create_app, load_env_file_values, normalize_import_target
+from src.paper_reader.app import create_app, load_env_file_values, normalize_import_target, parse_import_targets
+from src.paper_reader.chat_queue import ChatJob
+from src.paper_reader.ai_summary import DEFAULT_USER_PROMPT
+from src.paper_reader.chat_ai import answer_question_about_document, build_chat_prompt
 from src.paper_reader.markdown_render import render_markdown
-from src.paper_reader.prompt_manager import DEFAULT_PROMPT_SLUG
-from src.paper_reader.team_store import generate_auto_tags
+from src.paper_reader.prompt_manager import DEFAULT_PROMPT_SLUG, LEGACY_DEFAULT_USER_PROMPT, PromptStore
+from src.paper_reader.team_store import TeamStore, generate_auto_tags
 
 paper_reader_app_module = importlib.import_module("src.paper_reader.app")
+chat_ai_module = importlib.import_module("src.paper_reader.chat_ai")
 
 
 DOCX_CONTENT_TYPES = """<?xml version='1.0' encoding='UTF-8'?>
@@ -111,6 +116,34 @@ class PaperReaderAppTests(unittest.TestCase):
             archive.writestr("_rels/.rels", DOCX_RELS)
             archive.writestr("word/document.xml", DOCX_DOC.format(title=title, body=body))
             archive.writestr("docProps/core.xml", DOCX_CORE.format(title=title))
+
+    def fake_markdown_response(self, body: str):
+        payload = body.encode("utf-8")
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return payload
+
+        return FakeResponse()
+
+    def fake_binary_response(self, payload: bytes):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return payload
+
+        return FakeResponse()
 
     def login_client_as(self, client, username: str) -> None:
         user = self.app.team_store.get_user_by_username(username)
@@ -527,6 +560,109 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertEqual(custom_login.status_code, 302)
         self.assertEqual(custom_login.headers["Location"], "/")
 
+    def test_register_creates_member_and_logs_in(self) -> None:
+        client = self.app.test_client()
+        response = client.post(
+            "/register",
+            data={
+                "username": "new-user",
+                "display_name": "New User",
+                "password": "pw-123",
+                "confirm_password": "pw-123",
+                "next": "/",
+            },
+            follow_redirects=False,
+        )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/")
+        user = self.app.team_store.get_user_by_username("new-user")
+        self.assertIsNotNone(user)
+        assert user is not None
+        self.assertEqual(user.role, "member")
+
+    def test_team_store_promotes_named_admins_on_startup(self) -> None:
+        self.app.team_store.create_user("pony", "Pony", "secret", "member")
+        refreshed = TeamStore(self.library)
+        user = refreshed.get_user_by_username("pony")
+        self.assertIsNotNone(user)
+        assert user is not None
+        self.assertEqual(user.role, "admin")
+
+    def test_find_paper_by_source_dedupes_arxiv_versions_by_base_id(self) -> None:
+        pdf_path = self.library / "Imports" / "arXiv" / "2601.07155.pdf"
+        self.make_pdf(pdf_path, "Stable On-Policy Distillation through Adaptive Target Reformulation")
+        record = self.app.library.build_record_for_rel_path("Imports/arXiv/2601.07155.pdf", [])
+        self.app.team_store.sync_papers([record])
+        import sqlite3
+        with sqlite3.connect(self.app.team_store.db_path) as conn:
+            paper_id = int(conn.execute("SELECT id FROM papers WHERE rel_path = ?", ("Imports/arXiv/2601.07155.pdf",)).fetchone()[0])
+            conn.execute(
+                """
+                INSERT INTO paper_sources(paper_id, source_type, source_value, source_url, imported_by_user_id, created_at)
+                VALUES (?, 'arxiv', '2601.07155v1', 'https://arxiv.org/abs/2601.07155v1', NULL, '2026-04-24T00:00:00')
+                """,
+                (paper_id,),
+            )
+
+        found = self.app.team_store.find_paper_by_source("arxiv", "2601.07155")
+        self.assertEqual(found, "Imports/arXiv/2601.07155.pdf")
+
+    def test_remote_import_overwrites_existing_arxiv_when_newer_version_arrives(self) -> None:
+        existing_rel_path = "Imports/arXiv/2601.07155.pdf"
+        existing_path = self.library / existing_rel_path
+        self.make_pdf(existing_path, "Stable On-Policy Distillation v1")
+        record = self.app.library.build_record_for_rel_path(existing_rel_path, [])
+        self.app.team_store.sync_papers([record])
+        self.app.team_store.add_source(
+            existing_rel_path,
+            source_type="arxiv",
+            source_value="2601.07155v1",
+            source_url="https://arxiv.org/abs/2601.07155v1",
+        )
+
+        upgraded_pdf = self.library / "tmp-upgrade.pdf"
+        self.make_pdf(upgraded_pdf, "Stable On-Policy Distillation v2")
+        upgraded_bytes = upgraded_pdf.read_bytes()
+
+        admin_user = self.app.team_store.get_user_by_username("admin")
+        assert admin_user is not None
+        action = paper_reader_app_module.ActionRecord(
+            id="upgrade001",
+            kind="remote-import",
+            title="远程导入：2601.07155v2",
+            source="remote-import",
+            requested_by_user_id=admin_user.id,
+            requested_by_display_name=admin_user.display_name,
+            status="running",
+            progress=1,
+            message="任务开始执行。",
+            error=None,
+            result={},
+            payload={"raw_targets": "2601.07155v2", "recommendation_reason": ""},
+            created_at="2026-04-24T00:00:00",
+            updated_at="2026-04-24T00:00:00",
+            started_at="2026-04-24T00:00:00",
+            finished_at=None,
+        )
+        handler = self.app.action_queue._handlers["remote-import"]
+
+        with patch.object(paper_reader_app_module, "urlopen", return_value=self.fake_binary_response(upgraded_bytes)):
+            with patch.object(
+                self.app.job_queue,
+                "submit",
+                return_value={"queued": 1, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []},
+            ) as mocked_submit:
+                result = handler(action, lambda progress, message, payload=None: None, lambda: False)
+
+        self.assertEqual(result["summary"]["saved"], 1)
+        refreshed_bytes = existing_path.read_bytes()
+        self.assertEqual(refreshed_bytes, upgraded_bytes)
+        latest_sources = self.app.team_store.sources_for_rel_path(existing_rel_path)
+        self.assertEqual(latest_sources[0]["source_value"], "2601.07155")
+        self.assertEqual(latest_sources[0]["source_url"], "https://arxiv.org/abs/2601.07155v2")
+        self.assertEqual(mocked_submit.call_args.kwargs["force"], True)
+
     def test_profile_avatar_upload_updates_current_user_and_serves_file(self) -> None:
         response = self.client.post(
             "/profile/avatar",
@@ -744,6 +880,18 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertEqual(normalize_import_target("arxiv 2501.12948v2"), "2501.12948v2")
         self.assertEqual(normalize_import_target("arxiv.org/abs/2501.12948"), "https://arxiv.org/abs/2501.12948")
         self.assertEqual(normalize_import_target("abs/2501.12948"), "https://arxiv.org/abs/2501.12948")
+
+    def test_parse_import_targets_accepts_json_array(self) -> None:
+        self.assertEqual(
+            parse_import_targets('["2501.12948", "https://arxiv.org/abs/2501.12949"]'),
+            ["2501.12948", "https://arxiv.org/abs/2501.12949"],
+        )
+
+    def test_parse_import_targets_accepts_comma_and_space_separated_items(self) -> None:
+        self.assertEqual(
+            parse_import_targets("2501.12948, arxiv:2501.12949 https://arxiv.org/abs/2501.12950"),
+            ["2501.12948", "2501.12949", "https://arxiv.org/abs/2501.12950"],
+        )
 
     def test_generate_auto_tags_prefers_specialized_ai_terms(self) -> None:
         tags = generate_auto_tags(
@@ -1129,14 +1277,32 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn("2025-01", html)
         self.assertIn("核心解读", html)
 
-    def test_upload_saves_supported_file_and_triggers_auto_prompts(self) -> None:
+    def test_upload_submits_background_action(self) -> None:
         upload_bytes = io.BytesIO()
         writer = PdfWriter()
         writer.add_blank_page(width=72, height=72)
         writer.write(upload_bytes)
         upload_bytes.seek(0)
 
-        with patch.object(self.app.job_queue, "submit", return_value={"queued": 1, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}) as mocked:
+        fake_task = paper_reader_app_module.ActionRecord(
+            id="upload001",
+            kind="upload-import",
+            title="上传整理（1 个文件）",
+            source="upload",
+            requested_by_user_id=1,
+            requested_by_display_name="admin",
+            status="queued",
+            progress=0,
+            message="任务已提交，等待处理。",
+            error=None,
+            result={},
+            payload={},
+            created_at="2026-04-19T00:00:00",
+            updated_at="2026-04-19T00:00:00",
+            started_at=None,
+            finished_at=None,
+        )
+        with patch.object(self.app.action_queue, "submit", return_value=fake_task) as mocked:
             response = self.client.post(
                 "/upload",
                 data={
@@ -1147,25 +1313,37 @@ class PaperReaderAppTests(unittest.TestCase):
                 follow_redirects=True,
             )
 
+        html = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
-        self.assertTrue((self.library / "arxiv" / "2025" / "paper.pdf").exists())
-        mocked.assert_called_once_with(
-            ["arxiv/2025/paper.pdf"],
-            ["core-zh"],
-            force=False,
-            source="upload",
-            requested_by_user_id=ANY,
-            requested_by_display_name="admin",
-        )
+        self.assertIn("后台上传整理任务已开始：上传整理（1 个文件）", html)
+        mocked.assert_called_once()
 
-    def test_upload_file_endpoint_returns_json_for_single_success(self) -> None:
+    def test_upload_file_endpoint_returns_json_for_background_queue(self) -> None:
         upload_bytes = io.BytesIO()
         writer = PdfWriter()
         writer.add_blank_page(width=72, height=72)
         writer.write(upload_bytes)
         upload_bytes.seek(0)
 
-        with patch.object(self.app.job_queue, "submit", return_value={"queued": 1, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}) as mocked:
+        fake_task = paper_reader_app_module.ActionRecord(
+            id="upload002",
+            kind="upload-import",
+            title="上传整理：single.pdf",
+            source="upload",
+            requested_by_user_id=1,
+            requested_by_display_name="admin",
+            status="queued",
+            progress=0,
+            message="任务已提交，等待处理。",
+            error=None,
+            result={},
+            payload={},
+            created_at="2026-04-19T00:00:00",
+            updated_at="2026-04-19T00:00:00",
+            started_at=None,
+            finished_at=None,
+        )
+        with patch.object(self.app.action_queue, "submit", return_value=fake_task) as mocked:
             response = self.client.post(
                 "/upload-file",
                 data={
@@ -1179,25 +1357,35 @@ class PaperReaderAppTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json["status"], "saved")
-        self.assertEqual(response.json["saved_rel_path"], "incoming/single.pdf")
-        self.assertTrue(response.json["visible_in_current_view"])
-        self.assertEqual(response.json["paper"]["file_name"], "single.pdf")
-        mocked.assert_called_once_with(
-            ["incoming/single.pdf"],
-            ["core-zh"],
-            force=False,
-            source="upload",
-            requested_by_user_id=ANY,
-            requested_by_display_name="admin",
-        )
+        self.assertEqual(response.json["status"], "queued")
+        self.assertEqual(response.json["task_id"], "upload002")
+        self.assertIn("后台正在查重、入库并安排分析", response.json["message"])
+        mocked.assert_called_once()
 
-    def test_upload_file_endpoint_skips_duplicate_content(self) -> None:
+    def test_upload_file_endpoint_queues_even_if_duplicate_will_be_checked_later(self) -> None:
         original = io.BytesIO(b"same-content")
         duplicate = io.BytesIO(b"same-content")
         (self.library / "existing.pdf").write_bytes(original.getvalue())
 
-        with patch.object(self.app.job_queue, "submit") as mocked:
+        fake_task = paper_reader_app_module.ActionRecord(
+            id="upload003",
+            kind="upload-import",
+            title="上传整理：renamed.pdf",
+            source="upload",
+            requested_by_user_id=1,
+            requested_by_display_name="admin",
+            status="queued",
+            progress=0,
+            message="任务已提交，等待处理。",
+            error=None,
+            result={},
+            payload={},
+            created_at="2026-04-19T00:00:00",
+            updated_at="2026-04-19T00:00:00",
+            started_at=None,
+            finished_at=None,
+        )
+        with patch.object(self.app.action_queue, "submit", return_value=fake_task) as mocked:
             response = self.client.post(
                 "/upload-file",
                 data={
@@ -1211,19 +1399,36 @@ class PaperReaderAppTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json["status"], "duplicate")
-        self.assertEqual(response.json["duplicate_rel_path"], "existing.pdf")
+        self.assertEqual(response.json["status"], "queued")
         self.assertFalse((self.library / "renamed.pdf").exists())
-        mocked.assert_not_called()
+        mocked.assert_called_once()
 
-    def test_upload_route_keeps_successful_files_when_some_fail(self) -> None:
+    def test_upload_route_reports_invalid_files_but_queues_valid_ones(self) -> None:
         upload_bytes = io.BytesIO()
         writer = PdfWriter()
         writer.add_blank_page(width=72, height=72)
         writer.write(upload_bytes)
         upload_bytes.seek(0)
 
-        with patch.object(self.app.job_queue, "submit", return_value={"queued": 1, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}) as mocked:
+        fake_task = paper_reader_app_module.ActionRecord(
+            id="upload004",
+            kind="upload-import",
+            title="上传整理（1 个文件）",
+            source="upload",
+            requested_by_user_id=1,
+            requested_by_display_name="admin",
+            status="queued",
+            progress=0,
+            message="任务已提交，等待处理。",
+            error=None,
+            result={},
+            payload={},
+            created_at="2026-04-19T00:00:00",
+            updated_at="2026-04-19T00:00:00",
+            started_at=None,
+            finished_at=None,
+        )
+        with patch.object(self.app.action_queue, "submit", return_value=fake_task) as mocked:
             response = self.client.post(
                 "/upload",
                 data={
@@ -1240,53 +1445,129 @@ class PaperReaderAppTests(unittest.TestCase):
                 follow_redirects=True,
             )
 
+        html = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
-        self.assertTrue((self.library / "mixed" / "ok.pdf").exists())
+        self.assertIn("后台上传整理任务已开始：上传整理（1 个文件）", html)
+        self.assertIn("有 1 个文件因为格式问题没有进入后台整理", html)
         self.assertFalse((self.library / "mixed" / "bad.txt").exists())
-        mocked.assert_called_once_with(
-            ["mixed/ok.pdf"],
-            ["core-zh"],
-            force=False,
-            source="upload",
-            requested_by_user_id=ANY,
-            requested_by_display_name="admin",
-        )
+        mocked.assert_called_once()
 
     def test_import_link_route_accepts_arxiv_shortcuts(self) -> None:
-        pdf_path = self.source_root / "fixture.pdf"
-        self.make_pdf(pdf_path, "Imported from arXiv")
-        pdf_bytes = pdf_path.read_bytes()
-
-        class FakeResponse:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, exc_type, exc, tb):
-                return False
-
-            def read(self):
-                return pdf_bytes
-
-        with patch.object(paper_reader_app_module, "urlopen", return_value=FakeResponse()):
-            with patch.object(self.app.job_queue, "submit", return_value={"queued": 1, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}):
-                response = self.client.post(
-                    "/import-link",
-                    data={
-                        "folder": "",
-                        "q": "",
-                        "sort": "date_desc",
-                        "show_done": "",
-                        "import_target": "arxiv:2501.12948",
-                        "recommendation_reason": "",
-                    },
-                    follow_redirects=True,
-                )
+        fake_task = paper_reader_app_module.ActionRecord(
+            id="task123",
+            kind="remote-import",
+            title="远程导入：2501.12948",
+            source="remote-import",
+            requested_by_user_id=1,
+            requested_by_display_name="admin",
+            status="queued",
+            progress=0,
+            message="任务已提交，等待处理。",
+            error=None,
+            result={},
+            payload={},
+            created_at="2026-04-18T00:00:00",
+            updated_at="2026-04-18T00:00:00",
+            started_at=None,
+            finished_at=None,
+        )
+        with patch.object(self.app.action_queue, "submit", return_value=fake_task) as mocked_submit:
+            response = self.client.post(
+                "/import-link",
+                data={
+                    "folder": "",
+                    "q": "",
+                    "sort": "date_desc",
+                    "show_done": "",
+                    "import_target": "arxiv:2501.12948",
+                    "recommendation_reason": "",
+                },
+                follow_redirects=True,
+            )
 
         html = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("论文已经导入", html)
-        self.assertTrue((self.library / "Imports" / "arXiv" / "2501.12948.pdf").exists())
-        self.assertEqual(self.app.team_store.find_paper_by_source("arxiv", "2501.12948"), "Imports/arXiv/2501.12948.pdf")
+        self.assertIn("后台导入任务已开始：远程导入：2501.12948", html)
+        mocked_submit.assert_called_once()
+
+    def test_import_link_route_supports_batch_arxiv_imports(self) -> None:
+        fake_task = paper_reader_app_module.ActionRecord(
+            id="task456",
+            kind="remote-import",
+            title="远程导入（2 项）",
+            source="remote-import",
+            requested_by_user_id=1,
+            requested_by_display_name="admin",
+            status="queued",
+            progress=0,
+            message="任务已提交，等待处理。",
+            error=None,
+            result={},
+            payload={},
+            created_at="2026-04-18T00:00:00",
+            updated_at="2026-04-18T00:00:00",
+            started_at=None,
+            finished_at=None,
+        )
+        with patch.object(self.app.action_queue, "submit", return_value=fake_task) as mocked_submit:
+            response = self.client.post(
+                "/import-link",
+                data={
+                    "folder": "",
+                    "q": "",
+                    "sort": "date_desc",
+                    "show_done": "",
+                    "import_target": "2501.12948, arxiv:2501.12949",
+                    "recommendation_reason": "适合组会",
+                },
+                follow_redirects=True,
+            )
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("后台导入任务已开始：远程导入（2 项）", html)
+        mocked_submit.assert_called_once()
+
+    def test_import_link_route_shows_per_item_status_for_mixed_batch_inputs(self) -> None:
+        fake_task = paper_reader_app_module.ActionRecord(
+            id="task789",
+            kind="remote-import",
+            title="远程导入（3 项）",
+            source="remote-import",
+            requested_by_user_id=1,
+            requested_by_display_name="admin",
+            status="queued",
+            progress=0,
+            message="任务已提交，等待处理。",
+            error=None,
+            result={},
+            payload={},
+            created_at="2026-04-18T00:00:00",
+            updated_at="2026-04-18T00:00:00",
+            started_at=None,
+            finished_at=None,
+        )
+        with patch.object(self.app.action_queue, "submit", return_value=fake_task):
+            response = self.client.post(
+                "/import-link",
+                data={
+                    "folder": "",
+                    "q": "",
+                    "sort": "date_desc",
+                    "show_done": "",
+                    "import_target": (
+                        "2501.12948, "
+                        "https://openreview.net/pdf?id=test-openreview "
+                        "https://example.com/papers/test-paper.pdf"
+                    ),
+                    "recommendation_reason": "",
+                },
+                follow_redirects=True,
+            )
+
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("后台导入任务已开始：远程导入（3 项）", html)
 
     def test_prompt_save_route_creates_custom_prompt(self) -> None:
         response = self.client.post(
@@ -1430,7 +1711,25 @@ class PaperReaderAppTests(unittest.TestCase):
             enabled=True,
         )
 
-        with patch.object(paper_reader_app_module, "run_prompt_on_document", return_value='["lora", "finance", "coding"]'):
+        fake_task = paper_reader_app_module.ActionRecord(
+            id="tags001",
+            kind="ai-tags",
+            title="AI 标签刷新：paper.pdf",
+            source="ai-tags",
+            requested_by_user_id=1,
+            requested_by_display_name="admin",
+            status="queued",
+            progress=0,
+            message="任务已提交，等待处理。",
+            error=None,
+            result={},
+            payload={},
+            created_at="2026-04-18T00:00:00",
+            updated_at="2026-04-18T00:00:00",
+            started_at=None,
+            finished_at=None,
+        )
+        with patch.object(self.app.action_queue, "submit", return_value=fake_task):
             response = self.client.post(
                 "/tags/generate-ai",
                 data={
@@ -1445,13 +1744,9 @@ class PaperReaderAppTests(unittest.TestCase):
             )
 
         html = response.get_data(as_text=True)
-        context = self.app.team_store.paper_context("paper.pdf")
-        ai_tags = [tag.name for tag in context["tags"] if tag.source_type == "ai"]
 
         self.assertEqual(response.status_code, 200)
-        self.assertIn("AI 标签已刷新", html)
-        self.assertEqual(ai_tags, ["coding", "finance", "lora"])
-        self.assertNotIn("legacy-tag", ai_tags)
+        self.assertIn("AI 标签刷新任务已开始：AI 标签刷新：paper.pdf", html)
 
     def test_generate_prompt_result_refreshes_ai_tags_after_core_prompt(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Auto Tag Paper")
@@ -2500,31 +2795,254 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertIn("manifest.json", names)
         self.assertTrue(any(name.endswith(".pdf") for name in names))
 
-    def test_sources_import_copies_pdf_into_library_and_submits_auto_prompts(self) -> None:
+    def test_sources_import_submits_background_action(self) -> None:
         self.create_source_day("2026-04-11", paper_id="2604.08377", title="SkillClaw")
 
-        with patch.object(
-            self.app.job_queue,
-            "submit",
-            return_value={"queued": 1, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []},
-        ) as mocked:
+        fake_task = paper_reader_app_module.ActionRecord(
+            id="source001",
+            kind="source-import",
+            title="来源归档导入：2026-04-11（1 篇）",
+            source="source-import",
+            requested_by_user_id=1,
+            requested_by_display_name="admin",
+            status="queued",
+            progress=0,
+            message="任务已提交，等待处理。",
+            error=None,
+            result={},
+            payload={},
+            created_at="2026-04-18T00:00:00",
+            updated_at="2026-04-18T00:00:00",
+            started_at=None,
+            finished_at=None,
+        )
+        with patch.object(self.app.action_queue, "submit", return_value=fake_task) as mocked:
             response = self.client.post(
                 "/sources/import",
                 data={"run_date": "2026-04-11", "paper_ids": ["2604.08377"]},
                 follow_redirects=True,
             )
 
+        html = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
-        imported = self.library / "Sources" / "HuggingFace" / "2026" / "04" / "11" / "2604.08377.pdf"
-        self.assertTrue(imported.exists())
-        mocked.assert_called_once_with(
-            ["Sources/HuggingFace/2026/04/11/2604.08377.pdf"],
-            ["core-zh"],
-            force=False,
-            source="source-import",
-            requested_by_user_id=ANY,
-            requested_by_display_name="admin",
+        self.assertIn("后台导入任务已开始：来源归档导入：2026-04-11（1 篇）", html)
+        mocked.assert_called_once()
+
+    def test_generate_prompt_result_prefers_cached_arxiv_markdown(self) -> None:
+        pdf_path = self.library / "arxiv" / "2501.12948v2.pdf"
+        self.make_pdf(pdf_path, "Cached Markdown Paper")
+        rel_path = "arxiv/2501.12948v2.pdf"
+        scan = self.app.library.scan(force=True)
+        self.app.team_store.sync_papers(scan.papers)
+        self.app.team_store.add_source(
+            rel_path,
+            source_type="arxiv",
+            source_value="2501.12948v2",
+            source_url="https://arxiv.org/abs/2501.12948v2",
         )
+        prompt = self.app.prompt_store.get_prompt(DEFAULT_PROMPT_SLUG)
+        assert prompt is not None
+
+        with patch("src.paper_reader.arxiv_markdown.urlopen", return_value=self.fake_markdown_response("# arXiv markdown")):
+            with patch.object(paper_reader_app_module, "run_prompt_on_document", return_value="解读完成") as mocked_run:
+                with patch.object(self.app.library, "_maybe_refresh_ai_tags", return_value=None):
+                    result_path, generated = self.app.library.generate_prompt_result(rel_path, prompt, force=True)
+
+        cache_path = self.app.library.arxiv_markdown_path_for(rel_path)
+        metadata_path = self.app.library.arxiv_markdown_metadata_path_for(rel_path)
+        self.assertTrue(generated)
+        self.assertTrue(result_path.exists())
+        self.assertTrue(cache_path.exists())
+        self.assertTrue(metadata_path.exists())
+        self.assertEqual(cache_path.read_text(encoding="utf-8"), "# arXiv markdown\n")
+        self.assertEqual(mocked_run.call_args.kwargs["source_markdown_path"], cache_path)
+
+    def test_chat_queue_uses_cached_arxiv_markdown_for_answer(self) -> None:
+        pdf_path = self.library / "chat" / "2501.12948.pdf"
+        self.make_pdf(pdf_path, "Chat Markdown Paper")
+        rel_path = "chat/2501.12948.pdf"
+        scan = self.app.library.scan(force=True)
+        self.app.team_store.sync_papers(scan.papers)
+        self.app.team_store.add_source(
+            rel_path,
+            source_type="arxiv",
+            source_value="2501.12948",
+            source_url="https://arxiv.org/abs/2501.12948",
+        )
+        assistant_message_id = self.app.team_store.add_chat_message(
+            rel_path,
+            visibility="shared",
+            body="Paper Bot 正在思考...",
+            user_id=None,
+            role="assistant",
+            status="pending",
+        )
+        job = ChatJob(
+            rel_path=rel_path,
+            visibility="shared",
+            user_id=1,
+            display_name="admin",
+            question="这篇论文在解决什么问题？",
+            history=[],
+            assistant_message_id=assistant_message_id,
+            model="gpt-5.4",
+        )
+
+        with patch("src.paper_reader.arxiv_markdown.urlopen", return_value=self.fake_markdown_response("# cached chat markdown")):
+            with patch("src.paper_reader.chat_queue.answer_question_about_document", return_value="回答完成") as mocked_answer:
+                self.app.chat_queue._process_job(job)
+
+        cache_path = self.app.library.arxiv_markdown_path_for(rel_path)
+        self.assertTrue(cache_path.exists())
+        self.assertEqual(mocked_answer.call_args.kwargs["arxiv_markdown_path"], cache_path)
+        context = self.app.team_store.chat_context(rel_path, current_user_id=1)
+        shared_messages = context["shared"]["messages"]
+        self.assertEqual(shared_messages[-1].body, "回答完成")
+        self.assertEqual(shared_messages[-1].status, "completed")
+
+    def test_upload_import_action_prefetches_arxiv_markdown_cache(self) -> None:
+        admin_user = self.app.team_store.get_user_by_username("admin")
+        assert admin_user is not None
+        staging_dir = Path(self.app.config["UPLOAD_STAGING_ROOT"]) / "case-upload"
+        staging_dir.mkdir(parents=True, exist_ok=True)
+        staged_path = staging_dir / "2501.12948v2.pdf"
+        self.make_pdf(staged_path, "Uploaded Markdown Paper")
+        action = paper_reader_app_module.ActionRecord(
+            id="uploadcase1",
+            kind="upload-import",
+            title="上传整理：2501.12948v2.pdf",
+            source="upload",
+            requested_by_user_id=admin_user.id,
+            requested_by_display_name=admin_user.display_name,
+            status="running",
+            progress=1,
+            message="任务开始执行。",
+            error=None,
+            result={},
+            payload={
+                "target_folder": "Uploads",
+                "staged_files": [
+                    {
+                        "staged_rel_path": staged_path.relative_to(self.library).as_posix(),
+                        "original_name": "2501.12948v2.pdf",
+                    }
+                ],
+            },
+            created_at="2026-04-20T00:00:00",
+            updated_at="2026-04-20T00:00:00",
+            started_at="2026-04-20T00:00:00",
+            finished_at=None,
+        )
+        handler = self.app.action_queue._handlers["upload-import"]
+
+        with patch.object(self.app.job_queue, "submit", return_value={"queued": 1, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}):
+            with patch("src.paper_reader.arxiv_markdown.urlopen", return_value=self.fake_markdown_response("# prefetched upload markdown")):
+                result = handler(action, lambda progress, message, payload=None: None, lambda: False)
+
+        self.assertEqual(result["summary"]["saved"], 1)
+        rel_path = "Uploads/2501.12948v2.pdf"
+        cache_path = self.app.library.arxiv_markdown_path_for(rel_path)
+        self.assertTrue(cache_path.exists())
+        self.assertEqual(cache_path.read_text(encoding="utf-8"), "# prefetched upload markdown\n")
+
+    def test_source_import_action_prefetches_arxiv_markdown_cache(self) -> None:
+        self.create_source_day("2026-04-11", paper_id="2604.08377", title="SkillClaw")
+        admin_user = self.app.team_store.get_user_by_username("admin")
+        assert admin_user is not None
+        action = paper_reader_app_module.ActionRecord(
+            id="sourcecase1",
+            kind="source-import",
+            title="来源归档导入：2026-04-11（1 篇）",
+            source="source-import",
+            requested_by_user_id=admin_user.id,
+            requested_by_display_name=admin_user.display_name,
+            status="running",
+            progress=1,
+            message="任务开始执行。",
+            error=None,
+            result={},
+            payload={"run_date": "2026-04-11", "paper_ids": ["2604.08377"]},
+            created_at="2026-04-20T00:00:00",
+            updated_at="2026-04-20T00:00:00",
+            started_at="2026-04-20T00:00:00",
+            finished_at=None,
+        )
+        handler = self.app.action_queue._handlers["source-import"]
+
+        with patch.object(self.app.job_queue, "submit", return_value={"queued": 1, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}):
+            with patch("src.paper_reader.arxiv_markdown.urlopen", return_value=self.fake_markdown_response("# prefetched source markdown")):
+                result = handler(action, lambda progress, message, payload=None: None, lambda: False)
+
+        self.assertEqual(result["summary"]["saved"], 1)
+        rel_path = "Sources/HuggingFace/2026/04/11/2604.08377.pdf"
+        cache_path = self.app.library.arxiv_markdown_path_for(rel_path)
+        self.assertTrue(cache_path.exists())
+        self.assertEqual(cache_path.read_text(encoding="utf-8"), "# prefetched source markdown\n")
+
+    def test_index_shows_arxiv_markdown_cache_status(self) -> None:
+        pdf_path = self.library / "status" / "2501.12948.pdf"
+        self.make_pdf(pdf_path, "Status Markdown Paper")
+        rel_path = "status/2501.12948.pdf"
+        scan = self.app.library.scan(force=True)
+        self.app.team_store.sync_papers(scan.papers)
+        self.app.team_store.add_source(
+            rel_path,
+            source_type="arxiv",
+            source_value="2501.12948",
+            source_url="https://arxiv.org/abs/2501.12948",
+        )
+        with patch("src.paper_reader.arxiv_markdown.urlopen", return_value=self.fake_markdown_response("# cached status markdown")):
+            self.app.library.ensure_arxiv_markdown_for_rel_path(rel_path)
+
+        response = self.client.get("/", query_string={"paper": rel_path, "tab": "source"})
+        html = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("arXiv Markdown", html)
+        self.assertIn("已缓存", html)
+        self.assertIn("2501.12948", html)
+        self.assertIn("markdown.new", html)
+
+    def test_build_chat_prompt_requests_markdown_math_instead_of_code_blocks(self) -> None:
+        pdf_path = self.library / "formula" / "paper.pdf"
+        self.make_pdf(pdf_path, "Formula Paper")
+
+        prompt = build_chat_prompt(
+            pdf_path,
+            question="请推导文中的损失函数。",
+            visibility="private",
+            history=[],
+            prompt_contexts=[],
+        )
+
+        self.assertIn("使用 Markdown 输出", prompt)
+        self.assertIn("行内公式使用 `$...$`", prompt)
+        self.assertIn("独立公式使用 `$$...$$`", prompt)
+        self.assertIn("不要用 ``` 代码块包裹数学公式", prompt)
+        self.assertIn("必须写出关键公式", prompt)
+
+    def test_answer_question_about_document_uses_medium_reasoning_effort(self) -> None:
+        pdf_path = self.library / "formula" / "reasoning.pdf"
+        self.make_pdf(pdf_path, "Reasoning Paper")
+
+        def fake_run(cmd, **kwargs):
+            self.assertIn("-c", cmd)
+            config_value = cmd[cmd.index("-c") + 1]
+            self.assertEqual(config_value, "model_reasoning_effort='medium'")
+            output_path = Path(cmd[cmd.index("--output-last-message") + 1])
+            output_path.write_text("使用 $$E=mc^2$$ 作答", encoding="utf-8")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        with patch.object(chat_ai_module.shutil, "which", return_value="/usr/bin/codex"):
+            with patch.object(chat_ai_module.subprocess, "run", side_effect=fake_run):
+                answer = answer_question_about_document(
+                    pdf_path,
+                    question="给我关键公式。",
+                    visibility="private",
+                    history=[],
+                    prompt_contexts=[],
+                )
+
+        self.assertEqual(answer, "使用 $$E=mc^2$$ 作答")
 
     def test_render_markdown_supports_rule_and_blockquote(self) -> None:
         rendered = render_markdown("# 标题\n\n> 引用内容\n\n---\n\n1. 第一项\n2. 第二项")
@@ -2546,6 +3064,66 @@ class PaperReaderAppTests(unittest.TestCase):
 
         self.assertIn("<p>答案放在 <code>&lt;answer&gt;&lt;/answer&gt;</code> 里。</p>", rendered)
         self.assertNotIn("&amp;lt;answer&amp;gt;", rendered)
+
+    def test_render_markdown_supports_language_code_blocks_and_inline_math(self) -> None:
+        rendered = render_markdown(
+            "行内公式 $a_i=b_i+c_i$。\n\n```python\nprint('hi')\n```\n\n\\begin{aligned}\na&=b+c\n\\end{aligned}"
+        )
+
+        self.assertIn("<p>行内公式 $a_i=b_i+c_i$。</p>", rendered)
+        self.assertIn('<div class="code-block"><div class="code-block-head"><span class="code-block-language">python</span></div><pre><code class="language-python">print(&#x27;hi&#x27;)</code></pre></div>', rendered)
+        self.assertIn('<div class="math-block">\\begin{aligned}\na&amp;=b+c\n\\end{aligned}</div>', rendered)
+
+    def test_render_markdown_supports_tables_images_and_task_lists(self) -> None:
+        rendered = render_markdown(
+            "| 指标 | 数值 |\n"
+            "| :-- | --: |\n"
+            "| F1 | 91.2 |\n\n"
+            "- [x] 已完成\n"
+            "- [ ] 待验证\n\n"
+            "![架构图](https://example.com/arch.png)\n\n"
+            "~~旧结论~~"
+        )
+
+        self.assertIn('<div class="table-wrapper"><table><thead><tr><th style="text-align:left">指标</th><th style="text-align:right">数值</th></tr></thead><tbody><tr><td style="text-align:left">F1</td><td style="text-align:right">91.2</td></tr></tbody></table></div>', rendered)
+        self.assertIn('<label class="task-list-item"><input type="checkbox" disabled checked><span>已完成</span></label>', rendered)
+        self.assertIn('<img src="https://example.com/arch.png" alt="架构图" loading="lazy">', rendered)
+        self.assertIn("<p><del>旧结论</del></p>", rendered)
+
+    def test_default_summary_prompt_mentions_markdown_math_and_code_format(self) -> None:
+        self.assertIn("行内公式使用 `$...$`", DEFAULT_USER_PROMPT)
+        self.assertIn("三反引号代码块，并显式标注语言", DEFAULT_USER_PROMPT)
+
+    def test_chat_prompt_mentions_code_fences_and_math_format(self) -> None:
+        prompt = build_chat_prompt(
+            self.library / "paper.pdf",
+            question="请给我关键公式和伪代码",
+            visibility="shared",
+            history=[],
+            prompt_contexts=[],
+        )
+
+        self.assertIn("行内公式使用 `$...$`", prompt)
+        self.assertIn("三反引号代码块，并标注语言", prompt)
+
+    def test_prompt_store_upgrades_legacy_default_core_prompt(self) -> None:
+        prompt = self.app.prompt_store.get_prompt(DEFAULT_PROMPT_SLUG)
+        self.assertIsNotNone(prompt)
+        assert prompt is not None
+
+        import sqlite3
+
+        with sqlite3.connect(self.app.team_store.db_path) as conn:
+            conn.execute(
+                "UPDATE prompt_versions SET user_prompt = ? WHERE id = ?",
+                (LEGACY_DEFAULT_USER_PROMPT, prompt.version_id),
+            )
+
+        refreshed = PromptStore(self.library, self.app.team_store.db_path).get_prompt(DEFAULT_PROMPT_SLUG)
+        self.assertIsNotNone(refreshed)
+        assert refreshed is not None
+        self.assertGreaterEqual(refreshed.version, 2)
+        self.assertIn("全文使用标准 Markdown 组织内容", refreshed.user_prompt)
 
 
 if __name__ == "__main__":

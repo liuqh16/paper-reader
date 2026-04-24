@@ -10,8 +10,11 @@ from typing import Any, Iterable
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from .arxiv_markdown import base_arxiv_id, normalize_arxiv_id
+
 
 DEFAULT_DB_NAME = ".paper-reader-team.db"
+DEFAULT_ADMIN_USERNAMES = ("admin", "pony", "qihan", "andrew")
 _AUTO_TAG_STOPWORDS = {
     "a",
     "an",
@@ -194,6 +197,7 @@ class TeamStore:
         self._write_lock = threading.Lock()
         self._ensure_schema()
         self._migrate_likes_into_recommendations()
+        self._ensure_named_admins(DEFAULT_ADMIN_USERNAMES)
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
@@ -475,6 +479,32 @@ class TeamStore:
             avatar_rel_path=(str(user["avatar_rel_path"]) if user["avatar_rel_path"] else None),
         )
 
+    def _ensure_named_admins(self, usernames: tuple[str, ...]) -> None:
+        normalized = {item.strip().lower() for item in usernames if item and item.strip()}
+        if not normalized:
+            return
+        now = self._timestamp()
+        with self._write_lock:
+            with self._connect() as conn:
+                admin_role_id = self._role_id_for_slug_locked(conn, "admin")
+                rows = conn.execute(
+                    """
+                    SELECT u.id, u.username
+                    FROM users u
+                    WHERE lower(u.username) IN ({placeholders})
+                    """.format(placeholders=", ".join("?" for _ in normalized)),
+                    tuple(sorted(normalized)),
+                ).fetchall()
+                for row in rows:
+                    conn.execute(
+                        "INSERT OR REPLACE INTO user_roles(user_id, role_id) VALUES (?, ?)",
+                        (int(row["id"]), admin_role_id),
+                    )
+                    conn.execute(
+                        "UPDATE users SET updated_at = ? WHERE id = ?",
+                        (now, int(row["id"])),
+                    )
+
     def authenticate_user(self, username: str, password: str) -> TeamUser | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -608,6 +638,9 @@ class TeamStore:
         if user is None:
             raise RuntimeError("Failed to create user.")
         return user
+
+    def register_user(self, username: str, display_name: str, password: str) -> TeamUser:
+        return self.create_user(username, display_name, password, role_slug="member")
 
     def _role_id_for_slug_locked(self, conn: sqlite3.Connection, role_slug: str) -> int:
         row = conn.execute("SELECT id FROM roles WHERE slug = ?", (role_slug,)).fetchone()
@@ -805,7 +838,8 @@ class TeamStore:
         source_url: str | None = None,
         imported_by_user_id: int | None = None,
     ) -> None:
-        if not source_value.strip():
+        normalized_source_value = self._normalize_source_value(source_type, source_value)
+        if not normalized_source_value:
             return
         with self._write_lock:
             with self._connect() as conn:
@@ -821,21 +855,73 @@ class TeamStore:
                         source_url = COALESCE(excluded.source_url, paper_sources.source_url),
                         imported_by_user_id = COALESCE(excluded.imported_by_user_id, paper_sources.imported_by_user_id)
                     """,
-                    (paper_id, source_type, source_value.strip(), source_url, imported_by_user_id, self._timestamp()),
+                    (paper_id, source_type, normalized_source_value, source_url, imported_by_user_id, self._timestamp()),
                 )
 
     def find_paper_by_source(self, source_type: str, source_value: str) -> str | None:
+        normalized_source_value = self._normalize_source_value(source_type, source_value)
+        if not normalized_source_value:
+            return None
         with self._connect() as conn:
-            row = conn.execute(
-                """
-                SELECT p.rel_path
-                FROM paper_sources ps
-                JOIN papers p ON p.id = ps.paper_id
-                WHERE ps.source_type = ? AND ps.source_value = ?
-                """,
-                (source_type, source_value.strip()),
-            ).fetchone()
+            if source_type == "arxiv":
+                rows = conn.execute(
+                    """
+                    SELECT p.rel_path, ps.source_value, p.updated_at, p.id
+                    FROM paper_sources ps
+                    JOIN papers p ON p.id = ps.paper_id
+                    WHERE ps.source_type = ?
+                    ORDER BY p.updated_at DESC, p.id DESC
+                    """,
+                    (source_type,),
+                ).fetchall()
+                row = next(
+                    (
+                        candidate
+                        for candidate in rows
+                        if self._normalize_source_value(source_type, str(candidate["source_value"] or "")) == normalized_source_value
+                    ),
+                    None,
+                )
+            else:
+                row = conn.execute(
+                    """
+                    SELECT p.rel_path
+                    FROM paper_sources ps
+                    JOIN papers p ON p.id = ps.paper_id
+                    WHERE ps.source_type = ? AND ps.source_value = ?
+                    """,
+                    (source_type, normalized_source_value),
+                ).fetchone()
         return str(row["rel_path"]) if row is not None else None
+
+    def _normalize_source_value(self, source_type: str, source_value: str) -> str:
+        value = source_value.strip()
+        if not value:
+            return ""
+        if source_type != "arxiv":
+            return value
+        normalized = normalize_arxiv_id(value)
+        if normalized is None:
+            return value
+        return base_arxiv_id(normalized)
+
+    def sources_for_rel_path(self, rel_path: str) -> list[dict[str, str | None]]:
+        with self._connect() as conn:
+            paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+            if paper_id is None:
+                return []
+            rows = conn.execute(
+                "SELECT source_type, source_value, source_url FROM paper_sources WHERE paper_id = ? ORDER BY created_at DESC",
+                (paper_id,),
+            ).fetchall()
+        return [
+            {
+                "source_type": str(row["source_type"]),
+                "source_value": str(row["source_value"]),
+                "source_url": (str(row["source_url"]) if row["source_url"] else None),
+            }
+            for row in rows
+        ]
 
     def add_recommendation(self, rel_path: str, user_id: int, reason: str) -> None:
         reason = reason.strip()

@@ -12,6 +12,26 @@ from .ai_summary import DEFAULT_MODEL, DEFAULT_USER_PROMPT
 
 PROMPT_STORE_NAME = ".paper-reader-prompts.json"
 DEFAULT_PROMPT_SLUG = "core-zh"
+LEGACY_DEFAULT_USER_PROMPT = (
+    "请直接阅读本地论文文件 `{document_path}`，不要先把论文分段再汇总。\n\n"
+    "请用通俗、准确、结构化的中文解释这篇论文，重点回答：\n"
+    "1. 这篇论文到底想解决什么问题\n"
+    "2. 核心思想是什么，为什么这样做有效\n"
+    "3. 具体实现方法是什么，按步骤讲清楚输入、关键模块、训练/推理流程\n"
+    "4. 实验结果说明了什么\n"
+    "5. 这篇论文的优点、局限和适用场景\n\n"
+    "输出要求：\n"
+    "- 标题\n"
+    "- 一句话概括\n"
+    "- 核心思想（通俗解释）\n"
+    "- 具体实现方法（分步骤）\n"
+    "- 实验结果怎么看\n"
+    "- 优点与局限\n"
+    "- 如果我要自己复现，最该先做什么\n"
+)
+_SAFE_BUILTIN_PROMPT_UPDATES: dict[str, tuple[str, ...]] = {
+    DEFAULT_PROMPT_SLUG: (LEGACY_DEFAULT_USER_PROMPT,),
+}
 DEFAULT_TAG_PROMPT = (
     "请直接阅读本地论文文件 `{document_path}`。\n\n"
     "请根据论文内容生成 3 到 8 个适合团队检索的英文标签。\n"
@@ -58,6 +78,7 @@ class PromptStore:
         self.db_path = db_path.resolve()
         self._ensure_schema()
         self._migrate_legacy_prompts_if_needed()
+        self._sync_builtin_prompts_if_safe()
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path, timeout=30, check_same_thread=False)
@@ -123,6 +144,68 @@ class PromptStore:
 
         if not migrated_any:
             self._insert_prompt(self.default_prompt(), created_by_user_id=None)
+
+    def _sync_builtin_prompts_if_safe(self) -> None:
+        builtin_defaults = {
+            DEFAULT_PROMPT_SLUG: self.default_prompt(),
+        }
+        now = datetime.utcnow().isoformat(timespec="seconds")
+        with self._connect() as conn:
+            for slug, default_prompt in builtin_defaults.items():
+                legacy_versions = _SAFE_BUILTIN_PROMPT_UPDATES.get(slug, ())
+                if not legacy_versions:
+                    continue
+                row = conn.execute(
+                    """
+                    SELECT p.id AS prompt_id,
+                           p.name,
+                           p.enabled,
+                           p.auto_run,
+                           p.admin_only,
+                           p.created_at,
+                           p.updated_at,
+                           pv.version,
+                           pv.user_prompt,
+                           pv.model
+                    FROM prompts p
+                    JOIN prompt_versions pv
+                      ON pv.id = (
+                          SELECT latest.id
+                          FROM prompt_versions latest
+                          WHERE latest.prompt_id = p.id
+                          ORDER BY latest.version DESC, latest.id DESC
+                          LIMIT 1
+                      )
+                    WHERE p.slug = ? AND p.is_deleted = 0
+                    """,
+                    (slug,),
+                ).fetchone()
+                if row is None:
+                    continue
+                current_prompt = str(row["user_prompt"] or "")
+                if current_prompt == default_prompt.user_prompt:
+                    continue
+                if current_prompt not in legacy_versions:
+                    continue
+                next_version = int(row["version"]) + 1
+                prompt_id = int(row["prompt_id"])
+                conn.execute(
+                    "UPDATE prompts SET updated_at = ? WHERE id = ?",
+                    (now, prompt_id),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO prompt_versions(prompt_id, version, user_prompt, model, created_by_user_id, created_at)
+                    VALUES (?, ?, ?, ?, NULL, ?)
+                    """,
+                    (
+                        prompt_id,
+                        next_version,
+                        default_prompt.user_prompt,
+                        default_prompt.model,
+                        now,
+                    ),
+                )
 
     def list_prompts(self) -> list[PromptDefinition]:
         rows = self._list_prompt_rows()

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -27,12 +29,19 @@ DEFAULT_USER_PROMPT = (
     "- 实验结果怎么看\n"
     "- 优点与局限\n"
     "- 如果我要自己复现，最该先做什么\n"
+    "- 全文使用标准 Markdown 组织内容，优先使用 `##` / `###` 小标题、列表和短段落\n"
+    "- 如果涉及公式、损失函数、概率表达式、矩阵或符号定义：行内公式使用 `$...$`，独立公式使用 `$$...$$` 或 `\\[...\\]`\n"
+    "- 不要把数学公式放进代码块；公式前后尽量补一句自然语言解释符号含义\n"
+    "- 如果涉及算法、伪代码、配置、命令、接口或代码片段：必须使用三反引号代码块，并显式标注语言，例如 ```python```、```bash```、```json```\n"
+    "- 不要用缩进冒充代码块；代码块前先用一句话说明这段代码或命令在做什么\n"
+    "- 除非论文原文确实给出可直接复现的代码，否则不要编造实现细节；不确定时明确写“论文未说明”\n"
 )
 ProgressCallback = Callable[[int, str], None]
 AbortCallback = Callable[[], bool]
 ProcessCallback = Callable[[Any], None]
 SUPPORTED_SUMMARY_EXTENSIONS = {".pdf", ".doc", ".docx"}
 MAX_CODEX_RETRIES = 5
+DEFAULT_CODEX_QPS_LIMIT = 10.0
 
 
 class SafePromptValues(dict[str, str]):
@@ -40,15 +49,26 @@ class SafePromptValues(dict[str, str]):
         return "{" + key + "}"
 
 
-def render_user_prompt(user_prompt: str, document_path: Path) -> str:
+def render_user_prompt(user_prompt: str, document_path: Path, *, source_markdown_path: Path | None = None) -> str:
     values = SafePromptValues(
         document_name=document_path.name,
         document_path=str(document_path.resolve()),
         document_dir=str(document_path.resolve().parent),
         document_stem=document_path.stem,
         document_suffix=document_path.suffix.lower(),
+        arxiv_markdown_path=str(source_markdown_path.resolve()) if source_markdown_path else "",
     )
     rendered = user_prompt.format_map(values).strip()
+    if source_markdown_path is not None:
+        source_markdown_path = source_markdown_path.resolve()
+        rendered = (
+            f"{rendered}\n\n"
+            f"优先阅读这个本地 arXiv Markdown 文件：`{source_markdown_path}`\n"
+            "只要这份 Markdown 足够完整，就不要再读取原始 PDF / Word 文件，也不要让我再粘贴正文。\n"
+            f"原始论文文件仍然保留在：`{document_path.resolve()}`"
+        )
+        return rendered
+
     if "{document_path}" not in user_prompt and str(document_path.resolve()) not in rendered:
         rendered = (
             f"{rendered}\n\n"
@@ -56,6 +76,28 @@ def render_user_prompt(user_prompt: str, document_path: Path) -> str:
             "请直接读取这个本地文件，不要让我再粘贴正文，也不要先自行分段总结。"
         )
     return rendered
+
+
+class RequestRateLimiter:
+    def __init__(self, qps: float) -> None:
+        self.qps = max(0.1, float(qps))
+        self.min_interval = 1.0 / self.qps
+        self._lock = threading.Lock()
+        self._next_allowed_at = 0.0
+
+    def wait(self) -> float:
+        with self._lock:
+            now = time.monotonic()
+            wait_seconds = max(0.0, self._next_allowed_at - now)
+            scheduled_at = max(now, self._next_allowed_at)
+            self._next_allowed_at = scheduled_at + self.min_interval
+        if wait_seconds > 0:
+            time.sleep(wait_seconds)
+        return wait_seconds
+
+
+CODEX_QPS_LIMIT = float(os.environ.get("PAPER_READER_CODEX_QPS", DEFAULT_CODEX_QPS_LIMIT))
+CODEX_REQUEST_LIMITER = RequestRateLimiter(CODEX_QPS_LIMIT)
 
 
 def _progress_from_event(line_index: int, payload: dict[str, object] | None) -> tuple[int, str]:
@@ -79,13 +121,17 @@ def _run_codex_prompt(
     if shutil.which("codex") is None:
         raise RuntimeError("`codex` command is not available in PATH.")
 
-    if progress_callback:
-        progress_callback(5, "正在启动 Codex YOLO 后台任务。")
-
     last_error: RuntimeError | None = None
     for attempt in range(1, MAX_CODEX_RETRIES + 1):
         if should_abort and should_abort():
             raise InterruptedError("Job interrupted before Codex launch.")
+        wait_seconds = CODEX_REQUEST_LIMITER.wait()
+        if progress_callback:
+            if wait_seconds > 0:
+                progress_callback(3, f"请求较多，正在按约 {CODEX_QPS_LIMIT:.0f} QPS 限速启动。")
+            else:
+                progress_callback(3, f"正在按约 {CODEX_QPS_LIMIT:.0f} QPS 限速启动。")
+            progress_callback(5, "正在启动 Codex YOLO 后台任务。")
         with tempfile.TemporaryDirectory(prefix="paper-reader-codex-") as temp_dir:
             process = None
             try:
@@ -196,6 +242,7 @@ def run_prompt_on_document(
     *,
     user_prompt: str,
     model: str = DEFAULT_MODEL,
+    source_markdown_path: Path | None = None,
     progress_callback: ProgressCallback | None = None,
     should_abort: AbortCallback | None = None,
     process_callback: ProcessCallback | None = None,
@@ -205,11 +252,15 @@ def run_prompt_on_document(
         raise FileNotFoundError(document_path)
     if document_path.suffix.lower() not in SUPPORTED_SUMMARY_EXTENSIONS:
         raise UnsupportedDocumentError(f"Unsupported file type for Codex processing: {document_path.suffix}")
+    if source_markdown_path is not None:
+        source_markdown_path = source_markdown_path.resolve()
+        if not source_markdown_path.exists() or not source_markdown_path.is_file():
+            raise FileNotFoundError(source_markdown_path)
 
-    final_user_prompt = render_user_prompt(user_prompt, document_path)
+    final_user_prompt = render_user_prompt(user_prompt, document_path, source_markdown_path=source_markdown_path)
     return _run_codex_prompt(
         final_user_prompt,
-        workdir=document_path.parent,
+        workdir=(source_markdown_path.parent if source_markdown_path is not None else document_path.parent),
         model=model,
         progress_callback=progress_callback,
         should_abort=should_abort,

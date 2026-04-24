@@ -261,7 +261,39 @@
               <small>共享解读</small>
               <strong>{{ selected_paper_context.prompt_runs|length }} 份</strong>
             </div>
+            <div class="viewer-meta-pill">
+              <small>arXiv Markdown</small>
+              <strong>
+                {% if selected_arxiv_markdown_status.cached %}
+                  已缓存
+                {% elif selected_arxiv_markdown_status.available %}
+                  可获取
+                {% else %}
+                  未命中
+                {% endif %}
+              </strong>
+            </div>
           </div>
+          {% if selected_arxiv_markdown_status.available %}
+            <div class="viewer-tag-row">
+              <div class="viewer-tag-summary">
+                <span class="viewer-tag-empty">
+                  arXiv: {{ selected_arxiv_markdown_status.arxiv_id }}
+                  {% if selected_arxiv_markdown_status.cached and selected_arxiv_markdown_status.fetched_at %}
+                    · 缓存于 {{ selected_arxiv_markdown_status.fetched_at }}
+                  {% endif %}
+                </span>
+              </div>
+              <div class="viewer-tag-actions">
+                {% if selected_arxiv_markdown_status.source_url %}
+                  <a class="ghost-button compact-tag-toggle" href="{{ selected_arxiv_markdown_status.source_url }}" target="_blank" rel="noreferrer">arXiv 页面</a>
+                {% endif %}
+                {% if selected_arxiv_markdown_status.markdown_url %}
+                  <a class="ghost-button compact-tag-toggle" href="{{ selected_arxiv_markdown_status.markdown_url }}" target="_blank" rel="noreferrer">markdown.new</a>
+                {% endif %}
+              </div>
+            </div>
+          {% endif %}
           <div class="viewer-tag-row">
             <div class="viewer-tag-summary">
               {% for tag in summary_tags %}
@@ -739,6 +771,29 @@
         <span class="sr-only">推荐 {{ selected_paper_context.recommendation_count }}</span>
       </button>
     </form>
+    {% if selected_share_payload %}
+      <button
+        type="button"
+        class="icon-button workspace-dock-button workspace-share-button"
+        data-share-button
+        data-share-title="{{ selected_share_payload.title }}"
+        data-share-text="{{ selected_share_payload.text }}"
+        data-share-url="{{ selected_share_payload.url }}"
+        title="分享论文"
+        aria-label="分享论文"
+      >
+        <span class="icon-shell" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="18" cy="5" r="2.5"></circle>
+            <circle cx="6" cy="12" r="2.5"></circle>
+            <circle cx="18" cy="19" r="2.5"></circle>
+            <path d="M8.2 11l7.6-4.2"></path>
+            <path d="M8.2 13l7.6 4.2"></path>
+          </svg>
+        </span>
+        <span class="sr-only" data-share-label>分享论文</span>
+      </button>
+    {% endif %}
     <form action="{{ url_for('done_toggle_route') }}" method="post" class="inline-form workspace-dock-form">
       <input type="hidden" name="folder" value="{{ current_folder }}">
       <input type="hidden" name="q" value="{{ query }}">
@@ -932,14 +987,14 @@
         <input type="hidden" name="sort" value="{{ sort_by }}">
         <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
         <label>
-          <span>论文链接或 arXiv ID</span>
-          <input type="text" name="import_target" placeholder="例如：2501.12948 / arXiv 链接 / 直接 PDF 链接">
+          <span>论文链接或 arXiv ID 列表</span>
+          <textarea name="import_target" rows="3" placeholder='例如：2501.12948, 2501.12949 或 ["2501.12948", "https://arxiv.org/abs/2501.12949"]'></textarea>
         </label>
         <label>
           <span>推荐理由（可选）</span>
           <input type="text" name="recommendation_reason" placeholder="例如：适合本周组会讨论">
         </label>
-        <div class="tool-hint">现在支持 arXiv ID、arXiv 链接、OpenReview PDF 链接和直接 PDF 链接。</div>
+        <div class="tool-hint">现在支持单条或批量导入：可直接填 arXiv ID / arXiv 链接 / OpenReview PDF 链接 / 直接 PDF 链接；批量时支持 JSON 数组，或用逗号、空格、换行分隔多个 arXiv ID / 链接。</div>
         <div class="tool-actions">
           <button type="submit">导入远程论文</button>
         </div>
@@ -974,6 +1029,34 @@
         </div>
       {% endif %}
     </div>
+  </details>
+
+  <details class="tool-panel" open>
+    <summary>后台任务</summary>
+    <div class="jobs-panel-head">
+      <div class="jobs-controls">
+        <div class="tool-hint">远程导入、来源归档导入、AI 标签刷新都会在后台执行；你可以继续浏览页面，结果会自动刷新。</div>
+      </div>
+      <div class="job-summary-strip">
+        <div class="job-summary-card">
+          <span>正在执行</span>
+          <strong id="action-running-count">{{ initial_action_snapshot.running_count }}/{{ initial_action_snapshot.max_concurrency }}</strong>
+        </div>
+        <div class="job-summary-card">
+          <span>等待执行</span>
+          <strong id="action-queued-count">{{ initial_action_snapshot.queued_count }}</strong>
+        </div>
+        <div class="job-summary-card">
+          <span>活跃任务</span>
+          <strong id="action-active-count">{{ initial_action_snapshot.active_count }}</strong>
+        </div>
+        <div class="job-summary-card">
+          <span>并发上限</span>
+          <strong id="action-max-concurrency">{{ initial_action_snapshot.max_concurrency }}</strong>
+        </div>
+      </div>
+    </div>
+    <div id="action-dashboard" class="job-dashboard"></div>
   </details>
 
   <details class="tool-panel">
@@ -1142,9 +1225,11 @@
 {% endblock %}
 {% block scripts %}
   <script id="initial-job-snapshot" type="application/json">{{ initial_job_snapshot | tojson }}</script>
+  <script id="initial-action-snapshot" type="application/json">{{ initial_action_snapshot | tojson }}</script>
   <script>
     (() => {
       const dashboard = document.getElementById("job-dashboard");
+      const actionDashboard = document.getElementById("action-dashboard");
       const uploadForm = document.getElementById("upload-form");
       const uploadVisualizer = document.getElementById("upload-visualizer");
       const uploadFileList = document.getElementById("upload-file-list");
@@ -1175,10 +1260,15 @@
         private: document.querySelector('[data-chat-count="private"]'),
       };
       const initialData = JSON.parse(document.getElementById("initial-job-snapshot").textContent || "{\"jobs\":[]}");
+      const initialActionData = JSON.parse(document.getElementById("initial-action-snapshot").textContent || "{\"actions\":[]}");
       const runningCountNode = document.getElementById("job-running-count");
       const queuedCountNode = document.getElementById("job-queued-count");
       const averageDurationNode = document.getElementById("job-average-duration");
       const maxConcurrencyNode = document.getElementById("job-max-concurrency");
+      const actionRunningCountNode = document.getElementById("action-running-count");
+      const actionQueuedCountNode = document.getElementById("action-queued-count");
+      const actionActiveCountNode = document.getElementById("action-active-count");
+      const actionMaxConcurrencyNode = document.getElementById("action-max-concurrency");
       const sortBy = "{{ sort_by }}";
       const currentFolder = "{{ current_folder }}";
       const currentQuery = "{{ query }}";
@@ -1187,6 +1277,8 @@
       const settingsOrb = document.getElementById("settings-orb");
       const settingsDrawer = document.querySelector("[data-settings-drawer]");
       const closeSettingsButton = settingsDrawer ? settingsDrawer.querySelector("[data-close-settings]") : null;
+      const shareButton = document.querySelector("[data-share-button]");
+      const shareButtonLabel = shareButton ? shareButton.querySelector("[data-share-label]") : null;
       const paneToggleButtons = Array.from(document.querySelectorAll("[data-toggle-pane]"));
       const paneStateButtons = Array.from(document.querySelectorAll("[data-pane-button]"));
       const paneResizers = Array.from(document.querySelectorAll("[data-resizer]"));
@@ -1215,6 +1307,7 @@
       let activeChatPanel = loadSimpleValue(chatPanelStateKey, "activity");
       let activeSidebarPanel = loadSimpleValue(sidebarPanelStateKey, "library");
       let settingsReturnFocus = null;
+      let shareFeedbackTimer = null;
 
       function loadLayoutState() {
         try {
@@ -1257,6 +1350,79 @@
           window.localStorage.setItem(key, value);
         } catch (error) {
           // Ignore storage failures; the UI still works for this session.
+        }
+      }
+
+      function setShareButtonFeedback(label, active = true) {
+        if (!shareButton) return;
+        if (shareFeedbackTimer) {
+          window.clearTimeout(shareFeedbackTimer);
+          shareFeedbackTimer = null;
+        }
+        shareButton.classList.toggle("is-accent", active);
+        shareButton.setAttribute("title", label);
+        shareButton.setAttribute("aria-label", label);
+        if (shareButtonLabel) {
+          shareButtonLabel.textContent = label;
+        }
+        shareFeedbackTimer = window.setTimeout(() => {
+          if (!shareButton) return;
+          shareButton.classList.remove("is-accent");
+          shareButton.setAttribute("title", "分享论文");
+          shareButton.setAttribute("aria-label", "分享论文");
+          if (shareButtonLabel) {
+            shareButtonLabel.textContent = "分享论文";
+          }
+          shareFeedbackTimer = null;
+        }, 2200);
+      }
+
+      async function copyText(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+          return;
+        }
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "readonly");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        textarea.style.pointerEvents = "none";
+        document.body.appendChild(textarea);
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        const copied = document.execCommand("copy");
+        document.body.removeChild(textarea);
+        if (!copied) {
+          throw new Error("copy_failed");
+        }
+      }
+
+      async function handleShareClick() {
+        if (!shareButton) return;
+        const shareTitle = shareButton.dataset.shareTitle || document.title;
+        const shareText = shareButton.dataset.shareText || "";
+        const shareUrl = shareButton.dataset.shareUrl || window.location.href;
+        try {
+          if (navigator.share) {
+            try {
+              await navigator.share({
+                title: shareTitle,
+                text: shareText,
+                url: shareUrl,
+              });
+              setShareButtonFeedback("已打开分享面板");
+              return;
+            } catch (error) {
+              if (error && error.name === "AbortError") {
+                return;
+              }
+            }
+          }
+          await copyText(shareText || shareUrl);
+          setShareButtonFeedback("已复制分享文案");
+        } catch (error) {
+          setShareButtonFeedback("复制失败，请重试", false);
         }
       }
 
@@ -1504,6 +1670,11 @@
 
       paneResizers.forEach(bindPaneResizer);
       applyLayoutState();
+      if (shareButton) {
+        shareButton.addEventListener("click", () => {
+          handleShareClick();
+        });
+      }
 
       function escapeHtml(value) {
         return String(value || "").replace(/[&<>"']/g, (char) => ({
@@ -1519,7 +1690,11 @@
         return {
           queued: "等待处理",
           running: "正在处理",
+          resolving: "正在识别",
+          downloading: "正在下载",
+          importing: "正在入库",
           saved: "已收好",
+          existing: "已在库中",
           duplicate: "已跳过重复",
           error: "出了点问题",
           completed: "已完成",
@@ -1528,6 +1703,72 @@
           skipped: "已跳过",
           stopped: "已停止",
         }[status] || status;
+      }
+
+      function formatActionItemLine(item) {
+        const source = item.source || {};
+        const sourceType = source.source_type || "unknown";
+        const sourceLabel = {
+          arxiv: "arXiv",
+          openreview: "OpenReview PDF",
+          pdf_url: "PDF 链接",
+          huggingface_daily: "来源归档",
+          upload: "上传文件",
+        }[sourceType] || sourceType;
+        const relPath = item.rel_path ? ` → ${escapeHtml(item.rel_path)}` : "";
+        return `<li><strong>[${escapeHtml(sourceLabel)}]</strong> ${escapeHtml(item.target || item.title || item.key || "未知目标")} · ${escapeHtml(statusLabel(item.status))} · ${escapeHtml(item.message || "")}${relPath}</li>`;
+      }
+
+      function renderActionResultDetails(action) {
+        const result = action.result || {};
+        const items = Array.isArray(result.items) ? result.items : [];
+        if (!items.length) {
+          const tags = Array.isArray(result.tags) ? result.tags : [];
+          if (!tags.length) return "";
+          return `
+            <details class="action-result-details">
+              <summary>查看结果</summary>
+              <div class="action-result-body">
+                <p class="job-result">标签：${escapeHtml(tags.join("，"))}</p>
+              </div>
+            </details>
+          `;
+        }
+        const summary = result.summary || {};
+        const summaryLine = `新导入 ${summary.saved || 0} · 重复 ${summary.duplicate || 0} · 已存在 ${summary.existing || 0} · 失败 ${summary.failed || 0}`;
+        return `
+          <details class="action-result-details">
+            <summary>查看逐条结果（${items.length} 项）</summary>
+            <div class="action-result-body">
+              <p class="job-result">${escapeHtml(summaryLine)}</p>
+              <ul class="action-result-list">
+                ${items.map(formatActionItemLine).join("")}
+              </ul>
+            </div>
+          </details>
+        `;
+      }
+
+      function renderActionCard(action) {
+        return `
+          <article class="job-card ${action.status}">
+            <div class="job-card-top">
+              <div>
+                <strong>${escapeHtml(action.title || action.kind || "后台任务")}</strong>
+                <span>${escapeHtml(action.requested_by_display_name || "")}</span>
+              </div>
+              <span class="job-status">${escapeHtml(statusLabel(action.status))}</span>
+            </div>
+            <div class="job-progress"><span style="width: ${Number(action.progress || 0)}%"></span></div>
+            <div class="job-meta">
+              <span>${Number(action.progress || 0)}%</span>
+              <span>${escapeHtml(action.updated_at || "")}</span>
+            </div>
+            <p class="job-message">${escapeHtml(action.message || "")}</p>
+            ${action.error ? `<p class="job-error">${escapeHtml(action.error)}</p>` : ""}
+            ${renderActionResultDetails(action)}
+          </article>
+        `;
       }
 
       function ensurePaperList() {
@@ -1832,6 +2073,16 @@
         `;
       }
 
+      function queueMathTypeset(element) {
+        if (!element || !window.MathJax || typeof window.MathJax.typesetPromise !== "function") {
+          return;
+        }
+        if (typeof window.MathJax.typesetClear === "function") {
+          window.MathJax.typesetClear([element]);
+        }
+        window.MathJax.typesetPromise([element]).catch(() => {});
+      }
+
       function renderChatThread(visibility, thread) {
         const container = chatThreads[visibility];
         const countNode = chatCountNodes[visibility];
@@ -1847,6 +2098,7 @@
           return;
         }
         container.innerHTML = messages.map(renderChatMessage).join("");
+        queueMathTypeset(container);
         container.scrollTop = container.scrollHeight;
       }
 
@@ -1984,7 +2236,42 @@
         }
       }
 
+      function renderActions(snapshot) {
+        if (!actionDashboard) return;
+        const actions = Array.isArray(snapshot.actions) ? snapshot.actions : [];
+        if (actionRunningCountNode) {
+          actionRunningCountNode.textContent = `${Number(snapshot.running_count || 0)}/${Number(snapshot.max_concurrency || 0)}`;
+        }
+        if (actionQueuedCountNode) actionQueuedCountNode.textContent = String(snapshot.queued_count || 0);
+        if (actionActiveCountNode) actionActiveCountNode.textContent = String(snapshot.active_count || 0);
+        if (actionMaxConcurrencyNode) actionMaxConcurrencyNode.textContent = String(snapshot.max_concurrency || 0);
+
+        if (!actions.length) {
+          actionDashboard.innerHTML = '<div class="job-dashboard-empty">现在没有后台任务。</div>';
+          return;
+        }
+        const latestRemoteAction = actions.find((action) => action.kind === "remote-import") || null;
+        const primaryActions = actions.filter((action) => action.kind !== "remote-import" || action === latestRemoteAction);
+        const historicalRemoteActions = latestRemoteAction
+          ? actions.filter((action) => action.kind === "remote-import" && action !== latestRemoteAction)
+          : actions.filter((action) => action.kind === "remote-import");
+
+        const historySection = historicalRemoteActions.length
+          ? `
+            <details class="action-history-details">
+              <summary>历史导入信息（${historicalRemoteActions.length} 条）</summary>
+              <div class="action-history-grid">
+                ${historicalRemoteActions.map(renderActionCard).join("")}
+              </div>
+            </details>
+          `
+          : "";
+
+        actionDashboard.innerHTML = `${primaryActions.map(renderActionCard).join("")}${historySection}`;
+      }
+
       let jobRefreshTimer = null;
+      let actionRefreshTimer = null;
 
       function scheduleJobRefresh(delay) {
         if (!dashboard) return;
@@ -2011,6 +2298,35 @@
           scheduleJobRefresh((snapshot.active_count || 0) > 0 ? 4000 : 15000);
         } catch (error) {
           scheduleJobRefresh(15000);
+          throw error;
+        }
+      }
+
+      function scheduleActionRefresh(delay) {
+        if (!actionDashboard) return;
+        if (actionRefreshTimer) window.clearTimeout(actionRefreshTimer);
+        actionRefreshTimer = window.setTimeout(() => {
+          refreshActions().catch((error) => {
+            console.error("Failed to refresh actions", error);
+            scheduleActionRefresh(15000);
+          });
+        }, delay);
+      }
+
+      async function refreshActions() {
+        if (!actionDashboard) return;
+        if (document.hidden) {
+          scheduleActionRefresh(30000);
+          return;
+        }
+        try {
+          const response = await fetch("{{ url_for('actions_status') }}", { cache: "no-store" });
+          if (!response.ok) return;
+          const snapshot = await response.json();
+          renderActions(snapshot);
+          scheduleActionRefresh((snapshot.active_count || 0) > 0 ? 4000 : 15000);
+        } catch (error) {
+          scheduleActionRefresh(15000);
           throw error;
         }
       }
@@ -2043,7 +2359,7 @@
         }
 
         uploadVisualizer.hidden = false;
-        const completed = items.filter((item) => ["saved", "duplicate", "error"].includes(item.status)).length;
+        const completed = items.filter((item) => item.progress >= 100 && item.status !== "running").length;
         const duplicates = items.filter((item) => item.status === "duplicate").length;
         const errors = items.filter((item) => item.status === "error").length;
         const uploaded = items.reduce((sum, item) => sum + (item.loaded || 0), 0);
@@ -2158,6 +2474,9 @@
           if (response.status === "saved" || response.status === "duplicate") {
             refreshJobs().catch((error) => console.error("Failed to refresh jobs", error));
           }
+          if (response.status === "queued" || response.status === "saved" || response.status === "duplicate") {
+            refreshActions().catch((error) => console.error("Failed to refresh actions", error));
+          }
           updateUploadView(uploadItems);
         }
 
@@ -2191,6 +2510,10 @@
         renderJobs(initialData);
         scheduleJobRefresh((initialData.active_count || 0) > 0 ? 2500 : 12000);
       }
+      if (actionDashboard) {
+        renderActions(initialActionData);
+        scheduleActionRefresh((initialActionData.active_count || 0) > 0 ? 2500 : 12000);
+      }
 
       if (selectedPaper && (chatThreads.shared || chatThreads.private)) {
         scheduleChatRefresh(1200);
@@ -2200,6 +2523,9 @@
         if (!document.hidden) {
           if (dashboard) {
             refreshJobs().catch((error) => console.error("Failed to refresh jobs", error));
+          }
+          if (actionDashboard) {
+            refreshActions().catch((error) => console.error("Failed to refresh actions", error));
           }
           if (selectedPaper && (chatThreads.shared || chatThreads.private)) {
             refreshChatContext().catch((error) => console.error("Failed to refresh chat", error));
@@ -2237,12 +2563,30 @@
           if (!response.ok) throw new Error(`HTTP ${response.status}`);
           slot.innerHTML = await response.text();
           slot.dataset.panelUrl = panelUrl;
+          initializeLoadedPanel(slot);
           if (details) details.dataset.panelLoaded = "1";
         } catch (error) {
           console.error("Failed to load tool panel", error);
           slot.innerHTML = '<p class="lazy-panel-error">这里暂时没打开成功，请稍后重试。</p>';
         } finally {
           if (details) details.dataset.panelLoading = "0";
+        }
+      }
+
+      function syncTeamAdminPanel(panel) {
+        if (!panel) return;
+        const searchInput = panel.querySelector("[data-team-user-search]");
+        const query = (searchInput ? searchInput.value : "").trim().toLowerCase();
+        panel.querySelectorAll("[data-team-user-item]").forEach((item) => {
+          const key = (item.dataset.teamUserKey || "").toLowerCase();
+          item.hidden = Boolean(query) && !key.includes(query);
+        });
+      }
+
+      function initializeLoadedPanel(slot) {
+        const teamAdminPanel = slot.querySelector("[data-team-admin-panel]");
+        if (teamAdminPanel) {
+          syncTeamAdminPanel(teamAdminPanel);
         }
       }
 
@@ -2311,6 +2655,25 @@
             ? "已经切换成：处理全部匹配结果，不受当前页限制。"
             : "现在只会处理你手动勾选的论文。";
         }
+      });
+
+      document.addEventListener("input", (event) => {
+        const searchInput = event.target.closest("[data-team-user-search]");
+        if (!searchInput) return;
+        syncTeamAdminPanel(searchInput.closest("[data-team-admin-panel]"));
+      });
+
+      document.addEventListener("click", (event) => {
+        const toggleButton = event.target.closest("[data-team-user-toggle]");
+        if (!toggleButton) return;
+        const panel = toggleButton.closest("[data-team-admin-panel]");
+        if (!panel) return;
+        const shouldExpand = toggleButton.dataset.teamUserToggle === "expand";
+        panel.querySelectorAll("[data-team-user-item]").forEach((item) => {
+          if (!item.hidden) {
+            item.open = shouldExpand;
+          }
+        });
       });
 
       document.addEventListener("change", (event) => {

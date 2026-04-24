@@ -6,7 +6,7 @@
     <div class="auth-copy">
       <p class="eyebrow">Secure Access</p>
       <h2>登录团队论文阅读器</h2>
-      <p class="hero-copy">请使用管理员创建的团队账号登录。密码连续输错 3 次会锁定 5 分钟。</p>
+      <p class="hero-copy">请使用团队账号登录。密码连续输错 3 次会锁定 5 分钟；如果你是第一次来，也可以先注册一个 member 账号。</p>
     </div>
 
     <form class="auth-form" action="{{ url_for('login') }}" method="post">
@@ -24,6 +24,7 @@
       {% endif %}
       <div class="tool-actions">
         <button type="submit" {% if locked %}disabled{% endif %}>登录</button>
+        <a class="button-link secondary" href="{{ url_for('register', next=next_url) }}">注册新账号</a>
       </div>
     </form>
   </div>

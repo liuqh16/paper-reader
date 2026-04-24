@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% block title %}注册{% endblock %}
+{% block content %}
+<section class="auth-shell">
+  <div class="auth-card card">
+    <div class="auth-copy">
+      <p class="eyebrow">Join Paper Reader</p>
+      <h2>注册团队账号</h2>
+      <p class="hero-copy">陌生用户可以先注册一个 member 账号。注册后会自动登录；如果需要管理员权限，再由现有管理员调整角色。</p>
+    </div>
+
+    <form class="auth-form" action="{{ url_for('register') }}" method="post">
+      <input type="hidden" name="next" value="{{ next_url }}">
+      <label>
+        <span>用户名</span>
+        <input type="text" name="username" autocomplete="username" placeholder="例如：alice" autofocus>
+      </label>
+      <label>
+        <span>显示名</span>
+        <input type="text" name="display_name" autocomplete="nickname" placeholder="例如：Alice">
+      </label>
+      <label>
+        <span>密码</span>
+        <input type="password" name="password" autocomplete="new-password" placeholder="至少设置一个可登录的密码">
+      </label>
+      <label>
+        <span>确认密码</span>
+        <input type="password" name="confirm_password" autocomplete="new-password" placeholder="再输入一次密码">
+      </label>
+      <div class="tool-actions">
+        <button type="submit">注册并登录</button>
+        <a class="button-link secondary" href="{{ url_for('login', next=next_url) }}">已有账号，去登录</a>
+      </div>
+    </form>
+  </div>
+</section>
+{% endblock %}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import os
@@ -9,7 +10,8 @@ import string
 import tempfile
 import threading
 import time
-from urllib.parse import unquote, urlparse
+import uuid
+from urllib.parse import parse_qs, unquote, urlparse
 from urllib.request import Request, urlopen
 import zipfile
 from dataclasses import asdict, dataclass, replace
@@ -21,10 +23,22 @@ from flask import Flask, abort, flash, redirect, render_template, request, send_
 from markupsafe import Markup
 from werkzeug.utils import secure_filename
 
+from .action_queue import ActionRecord, ActionTaskQueue
 from .ai_summary import DEFAULT_MODEL, DEFAULT_USER_PROMPT, run_prompt_on_document
+from .arxiv_markdown import (
+    ARXIV_MARKDOWN_DIR_NAME,
+    ArxivMarkdownInfo,
+    base_arxiv_id,
+    choose_preferred_arxiv_id,
+    fetch_arxiv_markdown,
+    infer_arxiv_id_from_path,
+    markdown_new_url_for,
+    normalize_arxiv_id,
+    write_markdown_cache,
+)
 from .chat_queue import PaperChatQueue
 from .document_utils import ALLOWED_EXTENSIONS, extract_document_metadata
-from .insights_history import HistoricalInsightsStore
+from .insights_history import HistoricalInsightsStore, extract_digest
 from .insights_momentum import MomentumInsightsStore
 from .insights_opportunity import OpportunityInsightsStore
 from .markdown_render import render_markdown
@@ -40,6 +54,7 @@ DONE_INDEX_FILE_NAME = ".paper_reader_done_index.json"
 SUMMARY_DIR_NAME = ".paper-reader-ai"
 DONE_DIR_NAME = "DONE"
 AVATAR_DIR_NAME = ".paper-reader-avatars"
+UPLOAD_STAGING_DIR_NAME = ".paper-reader-upload-staging"
 ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 DEFAULT_BATCH_PANEL_PAGE_SIZE = 50
 DEFAULT_LOGIN_USERNAME = "admin"
@@ -142,6 +157,12 @@ class LoginGuard:
 
 
 _TAG_OUTPUT_CODE_BLOCK_RE = re.compile(r"```(?:json|text)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+_SHARE_SUMMARY_HEADINGS = (
+    "一句话概括",
+    "一句话总结",
+    "一段话概括",
+    "摘要速览",
+)
 
 
 def _normalize_generated_tag(candidate: str) -> str:
@@ -208,6 +229,50 @@ def parse_tag_generation_output(output: str) -> list[str]:
     return tags
 
 
+def _normalize_share_summary_line(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", text.replace("`", "").replace("**", "")).strip()
+    return cleaned.strip("：:- ").strip()
+
+
+def extract_share_summary(content: str) -> str:
+    body = content.strip()
+    marker = "\n---\n"
+    if marker in body:
+        body = body.split(marker, 1)[1].strip()
+    if not body:
+        return ""
+
+    lines = body.splitlines()
+    capture = False
+    fragments: list[str] = []
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped:
+            if capture and fragments:
+                break
+            continue
+
+        normalized = re.sub(r"^[#>*\-\s]+", "", stripped).strip().strip("*_` ")
+        normalized = _normalize_share_summary_line(normalized)
+        heading = next((item for item in _SHARE_SUMMARY_HEADINGS if normalized.startswith(item)), None)
+        if heading is not None:
+            remainder = _normalize_share_summary_line(normalized[len(heading) :])
+            if remainder:
+                return remainder[:360]
+            capture = True
+            fragments = []
+            continue
+
+        if capture:
+            if stripped.startswith("#") or (stripped.startswith("**") and stripped.endswith("**")):
+                break
+            fragments.append(_normalize_share_summary_line(stripped.lstrip("-* ")))
+
+    if fragments:
+        return _normalize_share_summary_line(" ".join(fragment for fragment in fragments if fragment))[:360]
+    return _normalize_share_summary_line(extract_digest(body))[:360]
+
+
 def normalize_import_target(raw_target: str) -> str:
     target = raw_target.strip()
     if not target:
@@ -226,6 +291,65 @@ def normalize_import_target(raw_target: str) -> str:
     return target
 
 
+def parse_import_targets(raw_target: str) -> list[str]:
+    target = raw_target.strip()
+    if not target:
+        return []
+
+    try:
+        parsed = json.loads(target)
+    except json.JSONDecodeError:
+        parsed = None
+
+    if isinstance(parsed, str):
+        normalized = normalize_import_target(parsed)
+        return [normalized] if normalized else []
+    if isinstance(parsed, list):
+        items: list[str] = []
+        for item in parsed:
+            if not isinstance(item, str):
+                raise ValueError("JSON 导入列表里的每一项都必须是字符串。")
+            normalized = normalize_import_target(item)
+            if normalized:
+                items.append(normalized)
+        return items
+
+    single_target = normalize_import_target(target)
+    if single_target and re.fullmatch(r"[^\s,]+", target):
+        return [single_target]
+
+    token_pattern = re.compile(
+        r"""
+        https?://[^\s,]+
+        |(?:www\.)?arxiv\.org/[^\s,]+
+        |(?:abs|pdf)/[^\s,]+
+        |arxiv[:\s]+\d{4}\.\d{4,5}(?:v\d+)?
+        |\d{4}\.\d{4,5}(?:v\d+)?
+        """,
+        flags=re.IGNORECASE | re.VERBOSE,
+    )
+    raw_items = [match.group(0) for match in token_pattern.finditer(target)]
+    if not raw_items:
+        return [single_target] if single_target else []
+
+    remainder = token_pattern.sub("", target)
+    if remainder.strip().strip(","):
+        split_candidates = [part.strip() for part in re.split(r"[\s,]+", target) if part.strip()]
+        if len(split_candidates) <= 1:
+            return [single_target] if single_target else split_candidates
+        raw_items = split_candidates
+
+    return [normalized for item in raw_items if (normalized := normalize_import_target(item))]
+
+
+def arxiv_version_number(arxiv_id: str | None) -> int:
+    normalized = normalize_arxiv_id(arxiv_id or "")
+    if normalized is None:
+        return 0
+    match = re.search(r"v(\d+)$", normalized, re.IGNORECASE)
+    return int(match.group(1)) if match is not None else 0
+
+
 class PaperLibrary:
     def __init__(self, root: Path, prompt_store: PromptStore, team_store: Any | None = None):
         self.root = root.resolve()
@@ -234,6 +358,8 @@ class PaperLibrary:
         self.done_index_path = self.root / DONE_INDEX_FILE_NAME
         self.summary_root = self.root / SUMMARY_DIR_NAME
         self.summary_root.mkdir(parents=True, exist_ok=True)
+        self.arxiv_markdown_root = self.root / ARXIV_MARKDOWN_DIR_NAME
+        self.arxiv_markdown_root.mkdir(parents=True, exist_ok=True)
         self.prompt_store = prompt_store
         self.team_store = team_store
         self._hash_cache: dict[str, tuple[float, int, str]] = {}
@@ -277,6 +403,10 @@ class PaperLibrary:
             if path.name == self.prompt_store.store_path.name:
                 continue
             if SUMMARY_DIR_NAME in path.parts:
+                continue
+            if ARXIV_MARKDOWN_DIR_NAME in path.parts:
+                continue
+            if UPLOAD_STAGING_DIR_NAME in path.parts:
                 continue
             if not include_done and DONE_DIR_NAME in path.parts:
                 continue
@@ -676,6 +806,60 @@ class PaperLibrary:
             "duplicate_rel_path": None,
         }
 
+    def clear_derived_artifacts(self, rel_path: str) -> None:
+        result_dir = self.prompt_result_dir_for(rel_path)
+        if result_dir.exists():
+            shutil.rmtree(result_dir)
+
+        legacy_path = self.legacy_summary_path_for(rel_path)
+        if legacy_path.exists():
+            legacy_path.unlink()
+
+        arxiv_markdown_path = self.arxiv_markdown_path_for(rel_path)
+        if arxiv_markdown_path.exists():
+            arxiv_markdown_path.unlink()
+
+        arxiv_metadata_path = self.arxiv_markdown_metadata_path_for(rel_path)
+        if arxiv_metadata_path.exists():
+            arxiv_metadata_path.unlink()
+
+    def replace_existing_file(self, rel_path: str, source_path: Path, *, clear_derived: bool = True) -> dict[str, Any]:
+        if not source_path.exists() or not source_path.is_file():
+            raise FileNotFoundError(str(source_path))
+
+        target = self.resolve_relative_path(rel_path)
+        if not target.exists() or not target.is_file():
+            raise FileNotFoundError(rel_path)
+        if source_path.suffix.lower() not in ALLOWED_EXTENSIONS:
+            raise ValueError(f"Unsupported file type: {source_path.name}")
+
+        source_size = source_path.stat().st_size
+        source_hash = sha256_for_path(source_path)
+        target_size = target.stat().st_size
+        target_hash = self.hash_for_path(target)
+        if source_size == target_size and source_hash == target_hash:
+            return {
+                "status": "existing",
+                "message": f"文件内容未变化：{target.name}",
+                "saved_rel_path": rel_path,
+                "duplicate_rel_path": None,
+            }
+
+        shutil.copy2(source_path, target)
+        self._hash_cache.pop(rel_path, None)
+        if clear_derived:
+            self.clear_derived_artifacts(rel_path)
+        if self.is_done_rel_path(rel_path):
+            self._update_done_index_entry(rel_path)
+        else:
+            self._update_active_index_entry(rel_path)
+        return {
+            "status": "saved",
+            "message": f"已覆盖更新：{target.name}",
+            "saved_rel_path": rel_path,
+            "duplicate_rel_path": None,
+        }
+
     def is_done_rel_path(self, rel_path: str) -> bool:
         parts = Path(rel_path).parts
         return bool(parts) and parts[0] == DONE_DIR_NAME
@@ -746,6 +930,18 @@ class PaperLibrary:
             new_legacy.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(old_legacy), str(new_legacy))
 
+        old_arxiv_markdown = self.arxiv_markdown_path_for(old_rel_path)
+        new_arxiv_markdown = self.arxiv_markdown_path_for(new_rel_path)
+        if old_arxiv_markdown.exists():
+            new_arxiv_markdown.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old_arxiv_markdown), str(new_arxiv_markdown))
+
+        old_arxiv_meta = self.arxiv_markdown_metadata_path_for(old_rel_path)
+        new_arxiv_meta = self.arxiv_markdown_metadata_path_for(new_rel_path)
+        if old_arxiv_meta.exists():
+            new_arxiv_meta.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(old_arxiv_meta), str(new_arxiv_meta))
+
     def create_folder(self, rel_folder: str) -> Path:
         rel_folder = rel_folder.strip().strip("/")
         if not rel_folder:
@@ -788,14 +984,7 @@ class PaperLibrary:
             raise FileNotFoundError(rel_path)
         target.unlink()
         self._hash_cache.pop(rel_path, None)
-
-        result_dir = self.prompt_result_dir_for(rel_path)
-        if result_dir.exists():
-            shutil.rmtree(result_dir)
-
-        legacy_path = self.legacy_summary_path_for(rel_path)
-        if legacy_path.exists():
-            legacy_path.unlink()
+        self.clear_derived_artifacts(rel_path)
         if self.is_done_rel_path(rel_path):
             self._update_done_index_entry(rel_path)
         else:
@@ -834,6 +1023,127 @@ class PaperLibrary:
 
     def prompt_result_path_for(self, rel_path: str, prompt_slug: str) -> Path:
         return self.prompt_result_dir_for(rel_path) / f"{prompt_slug}.md"
+
+    def arxiv_markdown_path_for(self, rel_path: str) -> Path:
+        rel = Path(rel_path)
+        return self.arxiv_markdown_root / rel.parent / f"{rel.name}.md"
+
+    def arxiv_markdown_metadata_path_for(self, rel_path: str) -> Path:
+        rel = Path(rel_path)
+        return self.arxiv_markdown_root / rel.parent / f"{rel.name}.json"
+
+    def cached_arxiv_markdown_path(self, rel_path: str) -> Path | None:
+        path = self.arxiv_markdown_path_for(rel_path)
+        return path if path.exists() else None
+
+    def arxiv_markdown_status_for_rel_path(self, rel_path: str) -> dict[str, Any]:
+        markdown_path = self.arxiv_markdown_path_for(rel_path)
+        metadata_path = self.arxiv_markdown_metadata_path_for(rel_path)
+        metadata: dict[str, Any] = {}
+        if metadata_path.exists():
+            try:
+                loaded = json.loads(metadata_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    metadata = loaded
+            except json.JSONDecodeError:
+                metadata = {}
+
+        cached_id = normalize_arxiv_id(str(metadata.get("arxiv_id") or ""))
+        arxiv_id = cached_id or self.resolve_arxiv_id_for(rel_path)
+        cached = markdown_path.exists()
+        fetched_at = str(metadata.get("fetched_at") or "") or None
+        return {
+            "available": arxiv_id is not None,
+            "arxiv_id": arxiv_id,
+            "cached": cached,
+            "source_url": (f"https://arxiv.org/abs/{arxiv_id}" if arxiv_id else None),
+            "markdown_url": (markdown_new_url_for(arxiv_id) if arxiv_id else None),
+            "markdown_rel_path": (markdown_path.relative_to(self.root).as_posix() if cached else None),
+            "metadata_rel_path": (metadata_path.relative_to(self.root).as_posix() if metadata_path.exists() else None),
+            "fetched_at": fetched_at,
+            "char_count": int(metadata.get("char_count") or 0) if metadata.get("char_count") else None,
+        }
+
+    def _arxiv_source_ids_for(self, rel_path: str) -> list[str]:
+        if self.team_store is None:
+            return []
+        try:
+            sources = self.team_store.sources_for_rel_path(rel_path)
+        except Exception:
+            return []
+        return [
+            str(source.get("source_value") or "").strip()
+            for source in sources
+            if str(source.get("source_type") or "") == "arxiv" and str(source.get("source_value") or "").strip()
+        ]
+
+    def resolve_arxiv_id_for(self, rel_path: str) -> str | None:
+        document_path = self.resolve_relative_path(rel_path)
+        explicit_ids = self._arxiv_source_ids_for(rel_path)
+        explicit_id = explicit_ids[0] if explicit_ids else None
+        inferred_id = infer_arxiv_id_from_path(document_path)
+        if explicit_id and inferred_id and base_arxiv_id(explicit_id) == base_arxiv_id(inferred_id):
+            return choose_preferred_arxiv_id(inferred_id, explicit_id)
+        return choose_preferred_arxiv_id(explicit_id, inferred_id)
+
+    def ensure_arxiv_markdown_for_rel_path(self, rel_path: str) -> ArxivMarkdownInfo | None:
+        markdown_path = self.arxiv_markdown_path_for(rel_path)
+        metadata_path = self.arxiv_markdown_metadata_path_for(rel_path)
+        if markdown_path.exists():
+            fetched_at = None
+            cached_arxiv_id = None
+            if metadata_path.exists():
+                try:
+                    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    cached_arxiv_id = normalize_arxiv_id(str(metadata.get("arxiv_id") or ""))
+                    fetched_at = str(metadata.get("fetched_at") or "") or None
+                except json.JSONDecodeError:
+                    fetched_at = None
+                    cached_arxiv_id = None
+            if cached_arxiv_id is None:
+                cached_arxiv_id = self.resolve_arxiv_id_for(rel_path)
+            if cached_arxiv_id is None:
+                return None
+            return ArxivMarkdownInfo(
+                arxiv_id=cached_arxiv_id,
+                markdown_path=markdown_path,
+                metadata_path=metadata_path,
+                source_url=f"https://arxiv.org/abs/{cached_arxiv_id}",
+                markdown_url=markdown_new_url_for(cached_arxiv_id),
+                fetched_at=fetched_at,
+                cached=True,
+            )
+
+        cached_arxiv_id = self.resolve_arxiv_id_for(rel_path)
+        if cached_arxiv_id is None:
+            return None
+
+        try:
+            markdown_text = fetch_arxiv_markdown(cached_arxiv_id)
+        except Exception:
+            return None
+
+        write_markdown_cache(markdown_path, metadata_path, arxiv_id=cached_arxiv_id, markdown_text=markdown_text)
+        if self.team_store is not None and not self._arxiv_source_ids_for(rel_path):
+            try:
+                self.team_store.add_source(
+                    rel_path,
+                    source_type="arxiv",
+                    source_value=cached_arxiv_id,
+                    source_url=f"https://arxiv.org/abs/{cached_arxiv_id}",
+                    imported_by_user_id=None,
+                )
+            except Exception:
+                pass
+        return ArxivMarkdownInfo(
+            arxiv_id=cached_arxiv_id,
+            markdown_path=markdown_path,
+            metadata_path=metadata_path,
+            source_url=f"https://arxiv.org/abs/{cached_arxiv_id}",
+            markdown_url=markdown_new_url_for(cached_arxiv_id),
+            fetched_at=datetime.utcnow().isoformat(timespec="seconds"),
+            cached=False,
+        )
 
     def list_existing_prompt_slugs(self, rel_path: str, visible_slugs: set[str] | None = None) -> list[str]:
         found: set[str] = set()
@@ -947,11 +1257,13 @@ class PaperLibrary:
         document_path = self.resolve_relative_path(rel_path)
         if not document_path.exists() or not document_path.is_file():
             raise FileNotFoundError(rel_path)
+        arxiv_markdown = self.ensure_arxiv_markdown_for_rel_path(rel_path)
 
         content = run_prompt_on_document(
             document_path,
             user_prompt=tag_prompt.user_prompt,
             model=tag_prompt.model or DEFAULT_MODEL,
+            source_markdown_path=(arxiv_markdown.markdown_path if arxiv_markdown is not None else None),
             progress_callback=progress_callback,
             should_abort=should_abort,
             process_callback=process_callback,
@@ -1017,11 +1329,13 @@ class PaperLibrary:
         if existing is not None and existing.exists() and not force:
             self._record_prompt_run(rel_path, prompt, existing, triggered_by_user_id=triggered_by_user_id)
             return existing, False
+        arxiv_markdown = self.ensure_arxiv_markdown_for_rel_path(rel_path)
 
         content = run_prompt_on_document(
             document_path,
             user_prompt=prompt.user_prompt,
             model=prompt.model or DEFAULT_MODEL,
+            source_markdown_path=(arxiv_markdown.markdown_path if arxiv_markdown is not None else None),
             progress_callback=progress_callback,
             should_abort=should_abort,
             process_callback=process_callback,
@@ -1377,6 +1691,8 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     app.config["SOURCE_ARCHIVE_ROOT"] = source_root.resolve()
     app.config["AVATAR_ROOT"] = (root / AVATAR_DIR_NAME).resolve()
     Path(app.config["AVATAR_ROOT"]).mkdir(parents=True, exist_ok=True)
+    app.config["UPLOAD_STAGING_ROOT"] = (root / UPLOAD_STAGING_DIR_NAME).resolve()
+    Path(app.config["UPLOAD_STAGING_ROOT"]).mkdir(parents=True, exist_ok=True)
     app.config["LOGIN_USERNAME"] = login_username
     app.config["LOGIN_PASSWORD"] = login_password
     app.config["SESSION_COOKIE_HTTPONLY"] = True
@@ -1395,6 +1711,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         app.prompt_store,
         max_concurrency=app.settings_store.max_concurrency(),  # type: ignore[attr-defined]
     )
+    app.action_queue = ActionTaskQueue(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
 
     def current_user() -> TeamUser | None:
         user_id = session.get("user_id")
@@ -1464,6 +1781,36 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     def avatar_filename_for_user(user_id: int, suffix: str) -> str:
         return f"user-{user_id}{suffix.lower()}"
 
+    def share_url_for_rel_path(rel_path: str) -> str:
+        return url_for("share_paper_route", rel_path=rel_path, _external=True)
+
+    def share_summary_for_paper(paper: PaperRecord) -> str:
+        core_result = app.library.read_prompt_result(paper.rel_path, DEFAULT_PROMPT_SLUG)  # type: ignore[attr-defined]
+        if core_result:
+            summary = extract_share_summary(core_result)
+            if summary:
+                return summary
+        preview_fallback = extract_share_summary(paper.preview_text or "")
+        if preview_fallback:
+            return preview_fallback
+        return "这篇论文值得直接打开 PaperReader 看原文和核心解读。"
+
+    def share_payload_for_paper(paper: PaperRecord) -> dict[str, str]:
+        summary = share_summary_for_paper(paper)
+        share_url = share_url_for_rel_path(paper.rel_path)
+        share_text = (
+            "这篇文章不错，分享给你\n\n"
+            f"《{paper.display_title}》\n"
+            f"一句话概括：{summary}\n\n"
+            f"PaperReader 阅读链接：\n{share_url}"
+        )
+        return {
+            "title": paper.display_title,
+            "summary": summary,
+            "url": share_url,
+            "text": share_text,
+        }
+
     @app.context_processor
     def inject_helpers() -> dict[str, Any]:
         user = current_user()
@@ -1490,7 +1837,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     @app.before_request
     def require_login() -> Any:
         endpoint = request.endpoint or ""
-        allowed = {"login", "logout", "health"}
+        allowed = {"login", "register", "logout", "health"}
         if endpoint in allowed or endpoint.startswith("static"):
             return None
         if session.get("authenticated") and current_user() is not None:
@@ -1507,6 +1854,17 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         session.clear()
         flash("你已退出登录。", "success")
         return redirect(url_for("login"))
+
+    @app.get("/share/<path:rel_path>")
+    def share_paper_route(rel_path: str) -> Any:
+        rel_path = rel_path.strip("/")
+        try:
+            absolute = app.library.resolve_relative_path(rel_path)  # type: ignore[attr-defined]
+        except ValueError:
+            abort(404)
+        if not absolute.exists() or not absolute.is_file():
+            abort(404)
+        return redirect(url_for("index", paper=rel_path, tab="source", show_done="1"))
 
     @app.get("/avatars/<path:filename>")
     def avatar_file_route(filename: str) -> Any:
@@ -1586,6 +1944,28 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             locked=status["locked"],
             remaining_seconds=status["remaining_seconds"],
         )
+
+    @app.route("/register", methods=["GET", "POST"])
+    def register() -> Any:
+        next_url = request.values.get("next", "") or url_for("index")
+        if request.method == "POST":
+            username = request.form.get("username", "").strip()
+            display_name = request.form.get("display_name", "").strip()
+            password = request.form.get("password", "")
+            confirm_password = request.form.get("confirm_password", "")
+            if password != confirm_password:
+                flash("两次输入的密码不一致。", "error")
+            else:
+                try:
+                    user = app.team_store.register_user(username, display_name, password)  # type: ignore[attr-defined]
+                except ValueError as exc:
+                    flash(str(exc), "error")
+                else:
+                    start_user_session(user)
+                    flash(f"欢迎加入，{user.display_name}。账号已经创建并自动登录。", "success")
+                    return redirect(next_url or url_for("index"))
+
+        return render_template("register.html", next_url=next_url)
 
     def serialize_paper_for_view(
         paper: PaperRecord,
@@ -1730,12 +2110,105 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         if result["invalid"]:
             flash(f"有 {result['invalid']} 项分析没找到对应模板，所以这次没有开始。", "error")
 
+    def summarize_action_items(items: list[dict[str, Any]]) -> dict[str, int]:
+        summary = {
+            "total": len(items),
+            "saved": 0,
+            "duplicate": 0,
+            "existing": 0,
+            "failed": 0,
+            "running": 0,
+            "queued": 0,
+        }
+        for item in items:
+            status = str(item.get("status") or "queued")
+            if status in summary:
+                summary[status] += 1
+            elif status in {"downloading", "importing", "resolving"}:
+                summary["running"] += 1
+        return summary
+
+    def build_action_result_payload(
+        items: list[dict[str, Any]],
+        *,
+        summary_overrides: dict[str, Any] | None = None,
+        rel_paths: list[str] | None = None,
+        submission: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "items": items,
+            "summary": summarize_action_items(items),
+        }
+        if summary_overrides:
+            payload["summary"].update(summary_overrides)
+        if rel_paths is not None:
+            payload["rel_paths"] = rel_paths
+        if submission is not None:
+            payload["submission"] = submission
+        return payload
+
+    def action_progress_percent(items: list[dict[str, Any]]) -> int:
+        if not items:
+            return 100
+        terminal_statuses = {"saved", "duplicate", "existing", "failed"}
+        completed = sum(1 for item in items if str(item.get("status")) in terminal_statuses)
+        return max(1, min(99, int((completed / len(items)) * 100)))
+
+    def update_action_item(
+        items: list[dict[str, Any]],
+        *,
+        key: str,
+        status: str,
+        message: str,
+        rel_path: str | None = None,
+        source: dict[str, Any] | None = None,
+    ) -> None:
+        for item in items:
+            if item.get("key") != key:
+                continue
+            item["status"] = status
+            item["message"] = message
+            if rel_path is not None:
+                item["rel_path"] = rel_path
+            if source is not None:
+                item["source"] = source
+            return
+
     def selected_source_papers(day_record: Any, selected_ids: list[str]) -> list[Any]:
         paper_map = day_paper_map(day_record)
         normalized_ids = [paper_id.strip() for paper_id in selected_ids if paper_id.strip()]
         if not normalized_ids:
             return list(day_record.papers)
         return [paper_map[paper_id] for paper_id in normalized_ids if paper_id in paper_map]
+
+    def stage_uploaded_file(file: Any) -> dict[str, Any]:
+        filename = getattr(file, "filename", "") or ""
+        if not filename:
+            raise ValueError("没有选择文件。")
+
+        suffix = Path(filename).suffix.lower()
+        if suffix not in ALLOWED_EXTENSIONS:
+            raise ValueError(f"不支持的文件类型：{filename}")
+
+        staging_root = Path(app.config["UPLOAD_STAGING_ROOT"])
+        staging_root.mkdir(parents=True, exist_ok=True)
+        safe_name = secure_filename(Path(filename).name) or Path(filename).name
+        unique_dir = staging_root / uuid.uuid4().hex
+        unique_dir.mkdir(parents=True, exist_ok=True)
+        staged_path = unique_dir / safe_name
+        try:
+            file.save(staged_path)
+        except Exception:
+            if staged_path.exists():
+                staged_path.unlink()
+            shutil.rmtree(unique_dir, ignore_errors=True)
+            raise
+
+        return {
+            "staged_rel_path": staged_path.relative_to(Path(app.config["LIBRARY_ROOT"])).as_posix(),
+            "original_name": filename,
+            "size": staged_path.stat().st_size,
+        }
 
     def import_source_day_papers(day_record: Any, papers: list[Any]) -> dict[str, Any]:
         target_folder = f"Sources/HuggingFace/{day_record.year}/{day_record.month}/{day_record.day}"
@@ -1771,6 +2244,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                     source_url=paper.url,
                     imported_by_user_id=current_user_id(),
                 )
+                try_prefetch_arxiv_markdown(result["saved_rel_path"])
             elif result["status"] == "duplicate":
                 duplicate_count += 1
 
@@ -1804,13 +2278,14 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         arxiv_match = re.fullmatch(r"\d{4}\.\d{4,5}(?:v\d+)?", target)
         if arxiv_match:
             paper_id = arxiv_match.group(0)
+            stable_paper_id = base_arxiv_id(paper_id)
             return {
                 "source_type": "arxiv",
                 "source_value": paper_id,
                 "source_url": f"https://arxiv.org/abs/{paper_id}",
                 "download_url": f"https://arxiv.org/pdf/{paper_id}.pdf",
                 "target_folder": "Imports/arXiv",
-                "preferred_name": f"{paper_id}.pdf",
+                "preferred_name": f"{stable_paper_id}.pdf",
             }
 
         parsed = urlparse(target)
@@ -1824,17 +2299,24 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             if arxiv_url_match is None:
                 raise ValueError("无法从 arXiv 链接中识别论文 ID。")
             paper_id = arxiv_url_match.group(1)
+            stable_paper_id = base_arxiv_id(paper_id)
             return {
                 "source_type": "arxiv",
                 "source_value": paper_id,
                 "source_url": f"https://arxiv.org/abs/{paper_id}",
                 "download_url": f"https://arxiv.org/pdf/{paper_id}.pdf",
                 "target_folder": "Imports/arXiv",
-                "preferred_name": f"{paper_id}.pdf",
+                "preferred_name": f"{stable_paper_id}.pdf",
             }
 
-        if host.endswith("openreview.net") and path.endswith(".pdf"):
-            preferred_name = Path(path).name or "openreview-paper.pdf"
+        if host.endswith("openreview.net") and (path.endswith(".pdf") or path.rstrip("/") == "/pdf"):
+            query_params = parse_qs(parsed.query or "")
+            openreview_id = (query_params.get("id") or [""])[0].strip()
+            preferred_name = Path(path).name or ""
+            if not preferred_name or preferred_name == "pdf":
+                preferred_name = f"{openreview_id or 'openreview-paper'}.pdf"
+            elif not preferred_name.lower().endswith(".pdf"):
+                preferred_name = f"{preferred_name}.pdf"
             return {
                 "source_type": "openreview",
                 "source_value": target,
@@ -1863,6 +2345,728 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             handle.write(response.read())
             return Path(handle.name)
 
+    def submit_remote_import_jobs(rel_paths: list[str], actor: TeamUser, *, source: str) -> dict[str, Any]:
+        return submit_remote_import_jobs_with_force(rel_paths, actor, source=source, force=False)
+
+    def submit_remote_import_jobs_with_force(
+        rel_paths: list[str],
+        actor: TeamUser,
+        *,
+        source: str,
+        force: bool,
+    ) -> dict[str, Any]:
+        auto_prompts = app.prompt_store.auto_prompts()  # type: ignore[attr-defined]
+        submission = {"queued": 0, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}
+        unique_rel_paths = list(dict.fromkeys(path for path in rel_paths if path))
+        if auto_prompts and unique_rel_paths:
+            submission = app.job_queue.submit(  # type: ignore[attr-defined]
+                unique_rel_paths,
+                [prompt.slug for prompt in auto_prompts],
+                force=force,
+                source=source,
+                requested_by_user_id=actor.id,
+                requested_by_display_name=actor.display_name,
+            )
+        return submission
+
+    def resolved_arxiv_id(resolved: dict[str, str]) -> str | None:
+        if str(resolved.get("source_type") or "") != "arxiv":
+            return None
+        return normalize_arxiv_id(str(resolved.get("source_url") or resolved.get("source_value") or ""))
+
+    def current_arxiv_id_for_rel_path(rel_path: str) -> str | None:
+        candidates: list[str] = []
+        try:
+            sources = app.team_store.sources_for_rel_path(rel_path)  # type: ignore[attr-defined]
+        except Exception:
+            sources = []
+        for source in sources:
+            if str(source.get("source_type") or "") != "arxiv":
+                continue
+            source_url = str(source.get("source_url") or "")
+            source_value = str(source.get("source_value") or "")
+            if source_url:
+                candidates.append(source_url)
+            if source_value:
+                candidates.append(source_value)
+        try:
+            candidates.append(str(app.library.resolve_arxiv_id_for(rel_path) or ""))  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        return choose_preferred_arxiv_id(*candidates)
+
+    def should_upgrade_existing_arxiv(rel_path: str, resolved: dict[str, str]) -> bool:
+        incoming_id = resolved_arxiv_id(resolved)
+        if incoming_id is None:
+            return False
+        existing_id = current_arxiv_id_for_rel_path(rel_path)
+        return arxiv_version_number(incoming_id) > arxiv_version_number(existing_id)
+
+    def describe_import_source(source_type: str) -> str:
+        mapping = {
+            "arxiv": "arXiv",
+            "openreview": "OpenReview PDF",
+            "pdf_url": "PDF 链接",
+        }
+        return mapping.get(source_type, source_type)
+
+    def format_batch_import_result_message(item: dict[str, Any]) -> tuple[str, str]:
+        source = item.get("source") or {}
+        source_type = str(source.get("source_type") or "unknown")
+        source_label = describe_import_source(source_type)
+        target = str(item.get("target") or "未知目标")
+        rel_path = item.get("rel_path")
+        status = str(item.get("status") or "failed")
+
+        if status == "saved":
+            return ("success", f"[{source_label}] {target} 已导入：{rel_path}")
+        if status == "duplicate":
+            return ("success", f"[{source_label}] {target} 检测到重复文件，已复用：{rel_path}")
+        if status == "existing":
+            return ("success", f"[{source_label}] {target} 已在库中：{rel_path}")
+        error = str(item.get("error") or "未知错误")
+        return ("error", f"[{source_label}] {target} 导入失败：{error}")
+
+    def submit_remote_import_action(raw_targets: str, recommendation_reason: str, actor: TeamUser) -> ActionRecord:
+        parsed_targets = parse_import_targets(raw_targets)
+        if not parsed_targets:
+            raise ValueError("请填写 arXiv ID、论文链接或 PDF 链接。")
+        title = f"远程导入（{len(parsed_targets)} 项）" if len(parsed_targets) > 1 else f"远程导入：{parsed_targets[0]}"
+        return app.action_queue.submit(  # type: ignore[attr-defined]
+            kind="remote-import",
+            title=title,
+            payload={
+                "raw_targets": raw_targets,
+                "recommendation_reason": recommendation_reason,
+            },
+            source="remote-import",
+            requested_by_user_id=actor.id,
+            requested_by_display_name=actor.display_name,
+        )
+
+    def submit_source_import_action(day_record: Any, selected: list[Any], actor: TeamUser) -> ActionRecord:
+        title = f"来源归档导入：{day_record.run_date}（{len(selected)} 篇）"
+        return app.action_queue.submit(  # type: ignore[attr-defined]
+            kind="source-import",
+            title=title,
+            payload={
+                "run_date": day_record.run_date,
+                "paper_ids": [paper.paper_id for paper in selected if paper.paper_id],
+            },
+            source="source-import",
+            requested_by_user_id=actor.id,
+            requested_by_display_name=actor.display_name,
+        )
+
+    def submit_ai_tag_action(rel_path: str, actor: TeamUser) -> ActionRecord:
+        return app.action_queue.submit(  # type: ignore[attr-defined]
+            kind="ai-tags",
+            title=f"AI 标签刷新：{Path(rel_path).name}",
+            payload={"rel_path": rel_path},
+            source="ai-tags",
+            requested_by_user_id=actor.id,
+            requested_by_display_name=actor.display_name,
+        )
+
+    def submit_upload_import_action(staged_files: list[dict[str, Any]], target_folder: str, actor: TeamUser) -> ActionRecord:
+        title = f"上传整理（{len(staged_files)} 个文件）" if len(staged_files) > 1 else f"上传整理：{staged_files[0]['original_name']}"
+        return app.action_queue.submit(  # type: ignore[attr-defined]
+            kind="upload-import",
+            title=title,
+            payload={
+                "staged_files": staged_files,
+                "target_folder": target_folder,
+            },
+            source="upload",
+            requested_by_user_id=actor.id,
+            requested_by_display_name=actor.display_name,
+        )
+
+    def try_prefetch_arxiv_markdown(rel_path: str) -> dict[str, Any] | None:
+        try:
+            info = app.library.ensure_arxiv_markdown_for_rel_path(rel_path)  # type: ignore[attr-defined]
+        except Exception:
+            return None
+        if info is None:
+            return None
+        return app.library.arxiv_markdown_status_for_rel_path(rel_path)  # type: ignore[attr-defined]
+
+    def perform_remote_import_action(
+        action: ActionRecord,
+        report: Callable[[int, str, dict[str, Any] | None], None],
+        should_abort: Callable[[], bool],
+    ) -> dict[str, Any]:
+        raw_targets = str(action.payload.get("raw_targets") or "")
+        recommendation_reason = str(action.payload.get("recommendation_reason") or "")
+        requested_by_user_id = action.requested_by_user_id
+
+        targets = parse_import_targets(raw_targets)
+        if not targets:
+            raise ValueError("请填写 arXiv ID、论文链接或 PDF 链接。")
+
+        unique_targets: list[str] = []
+        seen_targets: set[str] = set()
+        for target in targets:
+            if target in seen_targets:
+                continue
+            seen_targets.add(target)
+            unique_targets.append(target)
+
+        items = [{"key": target, "target": target, "status": "queued", "message": "等待处理。", "rel_path": None, "source": None} for target in unique_targets]
+        report(1, f"开始处理 {len(items)} 条远程导入任务。", build_action_result_payload(items))
+
+        actor = app.team_store.get_user(requested_by_user_id) if requested_by_user_id is not None else None  # type: ignore[attr-defined]
+        pending_downloads: list[dict[str, Any]] = []
+        rel_paths_for_jobs: list[str] = []
+        force_regenerate_rel_paths: list[str] = []
+
+        for item in items:
+            if should_abort():
+                raise InterruptedError("Import interrupted.")
+            target = str(item["target"])
+            update_action_item(items, key=target, status="resolving", message="正在识别链接类型。")
+            report(action_progress_percent(items), f"正在识别：{target}", build_action_result_payload(items))
+            try:
+                resolved = resolve_import_target(target)
+            except Exception as exc:
+                item["error"] = str(exc)
+                update_action_item(items, key=target, status="failed", message=str(exc))
+                report(action_progress_percent(items), f"识别失败：{target}", build_action_result_payload(items))
+                continue
+
+            item["source"] = resolved
+            existing_rel_path = app.team_store.find_paper_by_source(resolved["source_type"], resolved["source_value"])  # type: ignore[attr-defined]
+            if existing_rel_path:
+                if should_upgrade_existing_arxiv(existing_rel_path, resolved):
+                    update_action_item(items, key=target, status="downloading", message="检测到 arXiv 新版本，正在下载并覆盖旧版本。", source=resolved)
+                    pending_downloads.append({"target": target, "resolved": resolved, "existing_rel_path": existing_rel_path, "upgrade": True})
+                    report(action_progress_percent(items), f"发现新版本：{target}", build_action_result_payload(items))
+                    continue
+                if recommendation_reason.strip() and actor is not None:
+                    app.team_store.add_recommendation(existing_rel_path, actor.id, recommendation_reason)  # type: ignore[attr-defined]
+                markdown_status = try_prefetch_arxiv_markdown(existing_rel_path)
+                existing_message = "已在库中。"
+                if markdown_status and markdown_status.get("cached"):
+                    existing_message = "已在库中，已确认可直接使用 arXiv Markdown。"
+                update_action_item(items, key=target, status="existing", message=existing_message, rel_path=existing_rel_path, source=resolved)
+                rel_paths_for_jobs.append(existing_rel_path)
+                if actor is not None:
+                    submit_remote_import_jobs([existing_rel_path], actor, source="remote-import-batch")
+                report(action_progress_percent(items), f"已存在：{target}", build_action_result_payload(items))
+                continue
+
+            update_action_item(items, key=target, status="downloading", message="正在下载 PDF。", source=resolved)
+            pending_downloads.append({"target": target, "resolved": resolved})
+        if pending_downloads:
+            max_workers = min(4, len(pending_downloads))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {
+                    executor.submit(download_remote_pdf, item["resolved"]["download_url"]): item  # type: ignore[index]
+                    for item in pending_downloads
+                }
+                for future in as_completed(future_map):
+                    if should_abort():
+                        raise InterruptedError("Import interrupted.")
+                    item = future_map[future]
+                    target = str(item["target"])
+                    resolved = item["resolved"]
+                    upgrade_rel_path = str(item.get("existing_rel_path") or "") or None
+                    try:
+                        temp_path = future.result()
+                    except Exception as exc:
+                        update_action_item(items, key=target, status="failed", message=f"下载失败：{exc}", source=resolved)
+                        report(action_progress_percent(items), f"下载失败：{target}", build_action_result_payload(items))
+                        continue
+
+                    try:
+                        update_action_item(items, key=target, status="importing", message="下载完成，正在入库。", source=resolved)
+                        report(action_progress_percent(items), f"正在入库：{target}", build_action_result_payload(items))
+                        if upgrade_rel_path is not None:
+                            import_result = app.library.replace_existing_file(  # type: ignore[attr-defined]
+                                upgrade_rel_path,
+                                temp_path,
+                                clear_derived=True,
+                            )
+                        else:
+                            import_result = app.library.import_external_file(  # type: ignore[attr-defined]
+                                temp_path,
+                                resolved["target_folder"],
+                                preferred_name=resolved["preferred_name"],
+                            )
+                    finally:
+                        temp_path.unlink(missing_ok=True)
+
+                    if import_result["status"] == "duplicate" and import_result.get("duplicate_rel_path"):
+                        rel_path = str(import_result["duplicate_rel_path"])
+                    elif import_result["status"] == "existing" and import_result.get("saved_rel_path"):
+                        rel_path = str(import_result["saved_rel_path"])
+                    elif import_result["status"] == "saved" and import_result.get("saved_rel_path"):
+                        rel_path = str(import_result["saved_rel_path"])
+                        active_prompt_slugs = [prompt.slug for prompt in app.prompt_store.active_prompts()]  # type: ignore[attr-defined]
+                        imported_record = app.library.build_record_for_rel_path(rel_path, active_prompt_slugs)  # type: ignore[attr-defined]
+                        app.team_store.sync_papers([imported_record])  # type: ignore[attr-defined]
+                    else:
+                        update_action_item(items, key=target, status="failed", message=import_result.get("message") or "远程导入失败。", source=resolved)
+                        report(action_progress_percent(items), f"导入失败：{target}", build_action_result_payload(items))
+                        continue
+
+                    app.team_store.add_source(  # type: ignore[attr-defined]
+                        rel_path,
+                        source_type=resolved["source_type"],
+                        source_value=resolved["source_value"],
+                        source_url=resolved["source_url"],
+                        imported_by_user_id=requested_by_user_id,
+                    )
+                    markdown_status = try_prefetch_arxiv_markdown(rel_path)
+                    if recommendation_reason.strip() and actor is not None:
+                        app.team_store.add_recommendation(rel_path, actor.id, recommendation_reason)  # type: ignore[attr-defined]
+
+                    final_message = "导入完成。"
+                    if upgrade_rel_path is not None:
+                        final_message = "检测到 arXiv 新版本，已覆盖旧版本并重新生成。"
+                        force_regenerate_rel_paths.append(rel_path)
+                    if markdown_status and markdown_status.get("cached"):
+                        if upgrade_rel_path is not None:
+                            final_message = "检测到 arXiv 新版本，已覆盖旧版本，并刷新为新的 arXiv Markdown。"
+                        else:
+                            final_message = "导入完成，已缓存 arXiv Markdown。"
+                    update_action_item(items, key=target, status=import_result["status"], message=final_message, rel_path=rel_path, source=resolved)
+                    rel_paths_for_jobs.append(rel_path)
+                    report(action_progress_percent(items), f"完成：{target}", build_action_result_payload(items))
+
+        submission = {"queued": 0, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}
+        if rel_paths_for_jobs and actor is not None:
+            normal_rel_paths = [path for path in rel_paths_for_jobs if path not in set(force_regenerate_rel_paths)]
+            forced_rel_paths = [path for path in rel_paths_for_jobs if path in set(force_regenerate_rel_paths)]
+            if normal_rel_paths:
+                submission = submit_remote_import_jobs_with_force(normal_rel_paths, actor, source="remote-import-batch", force=False)
+            if forced_rel_paths:
+                forced_submission = submit_remote_import_jobs_with_force(forced_rel_paths, actor, source="remote-import-batch", force=True)
+                submission = {
+                    "queued": submission["queued"] + forced_submission["queued"],
+                    "existing": submission["existing"] + forced_submission["existing"],
+                    "skipped": submission["skipped"] + forced_submission["skipped"],
+                    "invalid": submission["invalid"] + forced_submission["invalid"],
+                    "job_ids": submission["job_ids"] + forced_submission["job_ids"],
+                    "jobs": submission["jobs"] + forced_submission["jobs"],
+                }
+
+        result = build_action_result_payload(
+            items,
+            rel_paths=rel_paths_for_jobs,
+            submission=submission,
+        )
+        summary = result["summary"]
+        result["_final_message"] = (
+            f"导入完成：新导入 {summary['saved']}，"
+            f"复用重复 {summary['duplicate']}，"
+            f"已存在 {summary['existing']}，"
+            f"失败 {summary['failed']}。"
+        )
+        report(100, str(result["_final_message"]), result)
+        return result
+
+    def perform_source_import_action(
+        action: ActionRecord,
+        report: Callable[[int, str, dict[str, Any] | None], None],
+        should_abort: Callable[[], bool],
+    ) -> dict[str, Any]:
+        run_date = str(action.payload.get("run_date") or "").strip()
+        paper_ids = [str(item).strip() for item in action.payload.get("paper_ids", []) if str(item).strip()]
+        day_record = load_source_day(Path(app.config["SOURCE_ARCHIVE_ROOT"]), run_date)
+        if day_record is None:
+            raise ValueError("没有找到这一天的来源归档。")
+
+        selected = selected_source_papers(day_record, paper_ids)
+        if not selected:
+            raise ValueError("先选至少一篇论文。")
+
+        items = [
+            {
+                "key": paper.paper_id or paper.title,
+                "target": paper.paper_id or paper.title,
+                "title": paper.title,
+                "status": "queued",
+                "message": "等待处理。",
+                "rel_path": None,
+                "source": {"source_type": day_record.source},
+            }
+            for paper in selected
+        ]
+        report(1, f"开始导入来源归档，共 {len(items)} 篇。", build_action_result_payload(items))
+
+        actor = app.team_store.get_user(action.requested_by_user_id) if action.requested_by_user_id is not None else None  # type: ignore[attr-defined]
+        rel_paths_for_jobs: list[str] = []
+        for paper in selected:
+            if should_abort():
+                raise InterruptedError("Import interrupted.")
+            item_key = paper.paper_id or paper.title
+            source_pdf_path = local_pdf_path_for(day_record, paper)
+            if source_pdf_path is None or not source_pdf_path.exists():
+                update_action_item(items, key=item_key, status="failed", message="缺少可用 PDF。")
+                report(action_progress_percent(items), f"缺少 PDF：{item_key}", build_action_result_payload(items))
+                continue
+
+            preferred_name = paper.pdf_file_name or f"{paper.paper_id}.pdf"
+            update_action_item(items, key=item_key, status="importing", message="正在导入本地 PDF。")
+            try:
+                import_result = app.library.import_external_file(  # type: ignore[attr-defined]
+                    source_pdf_path,
+                    f"Sources/HuggingFace/{day_record.year}/{day_record.month}/{day_record.day}",
+                    preferred_name=preferred_name,
+                )
+            except (FileNotFoundError, ValueError) as exc:
+                update_action_item(items, key=item_key, status="failed", message=str(exc))
+                report(action_progress_percent(items), f"导入失败：{item_key}", build_action_result_payload(items))
+                continue
+
+            if import_result["status"] == "saved" and import_result["saved_rel_path"]:
+                rel_path = str(import_result["saved_rel_path"])
+                rel_paths_for_jobs.append(rel_path)
+                active_prompt_slugs = [prompt.slug for prompt in app.prompt_store.active_prompts()]  # type: ignore[attr-defined]
+                imported_record = app.library.build_record_for_rel_path(rel_path, active_prompt_slugs)  # type: ignore[attr-defined]
+                app.team_store.sync_papers([imported_record])  # type: ignore[attr-defined]
+                app.team_store.add_source(  # type: ignore[attr-defined]
+                    rel_path,
+                    source_type=day_record.source,
+                    source_value=paper.paper_id or paper.title,
+                    source_url=paper.url,
+                    imported_by_user_id=action.requested_by_user_id,
+                )
+                markdown_status = try_prefetch_arxiv_markdown(rel_path)
+                final_message = "导入完成。"
+                if markdown_status and markdown_status.get("cached"):
+                    final_message = "导入完成，已缓存 arXiv Markdown。"
+                update_action_item(items, key=item_key, status="saved", message=final_message, rel_path=rel_path)
+                if actor is not None:
+                    submit_remote_import_jobs([rel_path], actor, source="source-import")
+            elif import_result["status"] == "duplicate" and import_result.get("duplicate_rel_path"):
+                duplicate_rel_path = str(import_result["duplicate_rel_path"])
+                rel_paths_for_jobs.append(duplicate_rel_path)
+                markdown_status = try_prefetch_arxiv_markdown(duplicate_rel_path)
+                duplicate_message = "检测到重复文件，已复用。"
+                if markdown_status and markdown_status.get("cached"):
+                    duplicate_message = "检测到重复文件，已复用，并确认已有 arXiv Markdown。"
+                update_action_item(items, key=item_key, status="duplicate", message=duplicate_message, rel_path=duplicate_rel_path)
+                if actor is not None:
+                    submit_remote_import_jobs([duplicate_rel_path], actor, source="source-import")
+            else:
+                update_action_item(items, key=item_key, status="failed", message=import_result.get("message") or "导入失败。")
+            report(action_progress_percent(items), f"已处理：{item_key}", build_action_result_payload(items))
+
+        submission = {"queued": 0, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}
+        if rel_paths_for_jobs and actor is not None:
+            submission = submit_remote_import_jobs(rel_paths_for_jobs, actor, source="source-import")
+
+        target_folder = f"Sources/HuggingFace/{day_record.year}/{day_record.month}/{day_record.day}"
+        result = build_action_result_payload(items, rel_paths=rel_paths_for_jobs, submission=submission)
+        result["target_folder"] = target_folder
+        summary = result["summary"]
+        result["_final_message"] = f"来源导入完成：新导入 {summary['saved']}，复用重复 {summary['duplicate']}，失败 {summary['failed']}。"
+        report(100, str(result["_final_message"]), result)
+        return result
+
+    def perform_ai_tag_action(
+        action: ActionRecord,
+        report: Callable[[int, str, dict[str, Any] | None], None],
+        should_abort: Callable[[], bool],
+    ) -> dict[str, Any]:
+        rel_path = str(action.payload.get("rel_path") or "").strip("/")
+        if not rel_path:
+            raise ValueError("论文不存在。")
+        ensure_paper_metadata(rel_path)
+        tags = app.library.generate_ai_tags(  # type: ignore[attr-defined]
+            rel_path,
+            progress_callback=lambda progress, message: report(progress, message, {"tags": []}),
+            should_abort=should_abort,
+            triggered_by_user_id=action.requested_by_user_id,
+        )
+        result = {
+            "rel_path": rel_path,
+            "tags": tags,
+            "_final_message": f"AI 标签已刷新：{', '.join(tags)}",
+        }
+        report(100, str(result["_final_message"]), result)
+        return result
+
+    def perform_upload_import_action(
+        action: ActionRecord,
+        report: Callable[[int, str, dict[str, Any] | None], None],
+        should_abort: Callable[[], bool],
+    ) -> dict[str, Any]:
+        target_folder = str(action.payload.get("target_folder") or "").strip().strip("/")
+        staged_files = list(action.payload.get("staged_files") or [])
+        if not staged_files:
+            raise ValueError("没有可处理的上传文件。")
+
+        items = []
+        for entry in staged_files:
+            original_name = str(entry.get("original_name") or "")
+            staged_rel_path = str(entry.get("staged_rel_path") or "")
+            items.append(
+                {
+                    "key": staged_rel_path or original_name,
+                    "target": original_name,
+                    "status": "queued",
+                    "message": "等待处理。",
+                    "rel_path": None,
+                    "source": {"source_type": "upload"},
+                }
+            )
+        report(1, f"开始整理上传文件，共 {len(items)} 个。", build_action_result_payload(items))
+
+        actor = app.team_store.get_user(action.requested_by_user_id) if action.requested_by_user_id is not None else None  # type: ignore[attr-defined]
+        rel_paths_for_jobs: list[str] = []
+        library_root = Path(app.config["LIBRARY_ROOT"])
+
+        for entry in staged_files:
+            if should_abort():
+                raise InterruptedError("Upload interrupted.")
+            staged_rel_path = str(entry.get("staged_rel_path") or "")
+            original_name = str(entry.get("original_name") or "")
+            key = staged_rel_path or original_name
+            staged_path = library_root / staged_rel_path
+            update_action_item(items, key=key, status="importing", message="正在查重并入库。")
+            report(action_progress_percent(items), f"正在处理：{original_name}", build_action_result_payload(items))
+            try:
+                if not staged_path.exists() or not staged_path.is_file():
+                    raise FileNotFoundError(original_name or staged_rel_path)
+                import_result = app.library.import_external_file(  # type: ignore[attr-defined]
+                    staged_path,
+                    target_folder,
+                    preferred_name=original_name or None,
+                )
+            except Exception as exc:
+                update_action_item(items, key=key, status="failed", message=str(exc))
+                report(action_progress_percent(items), f"处理失败：{original_name}", build_action_result_payload(items))
+                continue
+            finally:
+                try:
+                    staged_path.unlink(missing_ok=True)
+                    shutil.rmtree(staged_path.parent, ignore_errors=True)
+                except Exception:
+                    pass
+
+            if import_result["status"] == "duplicate" and import_result.get("duplicate_rel_path"):
+                rel_path = str(import_result["duplicate_rel_path"])
+                markdown_status = try_prefetch_arxiv_markdown(rel_path)
+                duplicate_message = "检测到重复文件，已复用。"
+                if markdown_status and markdown_status.get("cached"):
+                    duplicate_message = "检测到重复文件，已复用，并确认已有 arXiv Markdown。"
+                update_action_item(items, key=key, status="duplicate", message=duplicate_message, rel_path=rel_path)
+                rel_paths_for_jobs.append(rel_path)
+                if actor is not None:
+                    submit_remote_import_jobs([rel_path], actor, source="upload")
+            elif import_result["status"] == "saved" and import_result.get("saved_rel_path"):
+                rel_path = str(import_result["saved_rel_path"])
+                active_prompt_slugs = [prompt.slug for prompt in app.prompt_store.active_prompts()]  # type: ignore[attr-defined]
+                imported_record = app.library.build_record_for_rel_path(rel_path, active_prompt_slugs)  # type: ignore[attr-defined]
+                app.team_store.sync_papers([imported_record])  # type: ignore[attr-defined]
+                markdown_status = try_prefetch_arxiv_markdown(rel_path)
+                final_message = "上传整理完成。"
+                if markdown_status and markdown_status.get("cached"):
+                    final_message = "上传整理完成，已缓存 arXiv Markdown。"
+                update_action_item(items, key=key, status="saved", message=final_message, rel_path=rel_path)
+                rel_paths_for_jobs.append(rel_path)
+                if actor is not None:
+                    submit_remote_import_jobs([rel_path], actor, source="upload")
+            else:
+                update_action_item(items, key=key, status="failed", message=import_result.get("message") or "上传整理失败。")
+            report(action_progress_percent(items), f"已处理：{original_name}", build_action_result_payload(items))
+
+        submission = {"queued": 0, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}
+        if rel_paths_for_jobs and actor is not None:
+            submission = submit_remote_import_jobs(rel_paths_for_jobs, actor, source="upload")
+        result = build_action_result_payload(items, rel_paths=rel_paths_for_jobs, submission=submission)
+        summary = result["summary"]
+        result["_final_message"] = (
+            f"上传整理完成：新导入 {summary['saved']}，"
+            f"复用重复 {summary['duplicate']}，"
+            f"失败 {summary['failed']}。"
+        )
+        report(100, str(result["_final_message"]), result)
+        return result
+
+    app.action_queue.register_handler("remote-import", perform_remote_import_action)  # type: ignore[attr-defined]
+    app.action_queue.register_handler("source-import", perform_source_import_action)  # type: ignore[attr-defined]
+    app.action_queue.register_handler("ai-tags", perform_ai_tag_action)  # type: ignore[attr-defined]
+    app.action_queue.register_handler("upload-import", perform_upload_import_action)  # type: ignore[attr-defined]
+    app.action_queue.start()  # type: ignore[attr-defined]
+
+    def import_remote_papers(raw_targets: str, recommendation_reason: str) -> dict[str, Any]:
+        actor = current_user()
+        if actor is None:
+            raise PermissionError("需要先登录。")
+
+        targets = parse_import_targets(raw_targets)
+        if not targets:
+            raise ValueError("请填写 arXiv ID、论文链接或 PDF 链接。")
+
+        unique_targets: list[str] = []
+        seen_targets: set[str] = set()
+        for target in targets:
+            if target in seen_targets:
+                continue
+            seen_targets.add(target)
+            unique_targets.append(target)
+
+        results: list[dict[str, Any]] = []
+        pending_downloads: list[dict[str, Any]] = []
+
+        for target in unique_targets:
+            try:
+                resolved = resolve_import_target(target)
+            except Exception as exc:
+                results.append({"target": target, "status": "failed", "error": str(exc), "rel_path": None})
+                continue
+
+            existing_rel_path = app.team_store.find_paper_by_source(resolved["source_type"], resolved["source_value"])  # type: ignore[attr-defined]
+            if existing_rel_path:
+                if should_upgrade_existing_arxiv(existing_rel_path, resolved):
+                    pending_downloads.append({"target": target, "resolved": resolved, "existing_rel_path": existing_rel_path, "upgrade": True})
+                    continue
+                if recommendation_reason.strip():
+                    app.team_store.add_recommendation(existing_rel_path, actor.id, recommendation_reason)  # type: ignore[attr-defined]
+                try_prefetch_arxiv_markdown(existing_rel_path)
+                results.append(
+                    {
+                        "target": target,
+                        "status": "existing",
+                        "error": None,
+                        "rel_path": existing_rel_path,
+                        "source": resolved,
+                    }
+                )
+                continue
+
+            pending_downloads.append({"target": target, "resolved": resolved})
+
+        downloaded_temp_paths: dict[str, Path] = {}
+        if pending_downloads:
+            max_workers = min(4, len(pending_downloads))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_map = {
+                    executor.submit(download_remote_pdf, item["resolved"]["download_url"]): item  # type: ignore[index]
+                    for item in pending_downloads
+                }
+                for future in as_completed(future_map):
+                    item = future_map[future]
+                    target = str(item["target"])
+                    resolved = item["resolved"]
+                    try:
+                        downloaded_temp_paths[target] = future.result()
+                    except Exception as exc:
+                        results.append(
+                            {
+                                "target": target,
+                                "status": "failed",
+                                "error": str(exc),
+                                "rel_path": None,
+                                "source": resolved,
+                            }
+                        )
+
+        rel_paths_for_jobs: list[str] = []
+        force_regenerate_rel_paths: list[str] = []
+        for item in pending_downloads:
+            target = str(item["target"])
+            resolved = item["resolved"]
+            temp_path = downloaded_temp_paths.get(target)
+            if temp_path is None:
+                continue
+            upgrade_rel_path = str(item.get("existing_rel_path") or "") or None
+
+            try:
+                if upgrade_rel_path is not None:
+                    import_result = app.library.replace_existing_file(  # type: ignore[attr-defined]
+                        upgrade_rel_path,
+                        temp_path,
+                        clear_derived=True,
+                    )
+                else:
+                    import_result = app.library.import_external_file(  # type: ignore[attr-defined]
+                        temp_path,
+                        resolved["target_folder"],
+                        preferred_name=resolved["preferred_name"],
+                    )
+            finally:
+                temp_path.unlink(missing_ok=True)
+
+            if import_result["status"] == "duplicate" and import_result.get("duplicate_rel_path"):
+                rel_path = str(import_result["duplicate_rel_path"])
+            elif import_result["status"] == "existing" and import_result.get("saved_rel_path"):
+                rel_path = str(import_result["saved_rel_path"])
+            elif import_result["status"] == "saved" and import_result.get("saved_rel_path"):
+                rel_path = str(import_result["saved_rel_path"])
+                active_prompt_slugs = [prompt.slug for prompt in app.prompt_store.active_prompts()]  # type: ignore[attr-defined]
+                imported_record = app.library.build_record_for_rel_path(rel_path, active_prompt_slugs)  # type: ignore[attr-defined]
+                app.team_store.sync_papers([imported_record])  # type: ignore[attr-defined]
+            else:
+                results.append(
+                    {
+                        "target": target,
+                        "status": "failed",
+                        "error": import_result.get("message") or "远程导入失败。",
+                        "rel_path": None,
+                        "source": resolved,
+                    }
+                )
+                continue
+
+            app.team_store.add_source(  # type: ignore[attr-defined]
+                rel_path,
+                source_type=resolved["source_type"],
+                source_value=resolved["source_value"],
+                source_url=resolved["source_url"],
+                imported_by_user_id=actor.id,
+            )
+            try_prefetch_arxiv_markdown(rel_path)
+            if recommendation_reason.strip():
+                app.team_store.add_recommendation(rel_path, actor.id, recommendation_reason)  # type: ignore[attr-defined]
+
+            results.append(
+                {
+                    "target": target,
+                    "status": import_result["status"],
+                    "error": None,
+                    "rel_path": rel_path,
+                    "source": resolved,
+                    "upgraded": bool(upgrade_rel_path),
+                }
+            )
+            rel_paths_for_jobs.append(rel_path)
+            if upgrade_rel_path is not None:
+                force_regenerate_rel_paths.append(rel_path)
+
+        normal_rel_paths = [path for path in rel_paths_for_jobs if path not in set(force_regenerate_rel_paths)]
+        forced_rel_paths = [path for path in rel_paths_for_jobs if path in set(force_regenerate_rel_paths)]
+        submission = {"queued": 0, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}
+        if normal_rel_paths:
+            submission = submit_remote_import_jobs_with_force(normal_rel_paths, actor, source="remote-import-batch", force=False)
+        if forced_rel_paths:
+            forced_submission = submit_remote_import_jobs_with_force(forced_rel_paths, actor, source="remote-import-batch", force=True)
+            submission = {
+                "queued": submission["queued"] + forced_submission["queued"],
+                "existing": submission["existing"] + forced_submission["existing"],
+                "skipped": submission["skipped"] + forced_submission["skipped"],
+                "invalid": submission["invalid"] + forced_submission["invalid"],
+                "job_ids": submission["job_ids"] + forced_submission["job_ids"],
+                "jobs": submission["jobs"] + forced_submission["jobs"],
+            }
+        successful_results = [item for item in results if item.get("rel_path")]
+        return {
+            "targets": unique_targets,
+            "results": results,
+            "submission": submission,
+            "saved_count": sum(1 for item in results if item.get("status") == "saved"),
+            "duplicate_count": sum(1 for item in results if item.get("status") == "duplicate"),
+            "existing_count": sum(1 for item in results if item.get("status") == "existing"),
+            "failed_count": sum(1 for item in results if item.get("status") == "failed"),
+            "rel_paths": [str(item["rel_path"]) for item in successful_results if item.get("rel_path")],
+            "first_rel_path": next((str(item["rel_path"]) for item in results if item.get("rel_path")), None),
+            "error_messages": [f'{item["target"]}: {item["error"]}' for item in results if item.get("status") == "failed" and item.get("error")],
+        }
+
     def import_remote_paper(target: str, recommendation_reason: str) -> dict[str, Any]:
         actor = current_user()
         if actor is None:
@@ -1870,8 +3074,32 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         resolved = resolve_import_target(target)
         existing_rel_path = app.team_store.find_paper_by_source(resolved["source_type"], resolved["source_value"])  # type: ignore[attr-defined]
         if existing_rel_path:
+            if should_upgrade_existing_arxiv(existing_rel_path, resolved):
+                temp_path = download_remote_pdf(resolved["download_url"])
+                try:
+                    result = app.library.replace_existing_file(  # type: ignore[attr-defined]
+                        existing_rel_path,
+                        temp_path,
+                        clear_derived=True,
+                    )
+                finally:
+                    temp_path.unlink(missing_ok=True)
+                rel_path = existing_rel_path
+                app.team_store.add_source(  # type: ignore[attr-defined]
+                    rel_path,
+                    source_type=resolved["source_type"],
+                    source_value=resolved["source_value"],
+                    source_url=resolved["source_url"],
+                    imported_by_user_id=actor.id,
+                )
+                try_prefetch_arxiv_markdown(rel_path)
+                if recommendation_reason.strip():
+                    app.team_store.add_recommendation(rel_path, actor.id, recommendation_reason)  # type: ignore[attr-defined]
+                submission = submit_remote_import_jobs_with_force([rel_path], actor, source="remote-import", force=True)
+                return {"status": result["status"], "rel_path": rel_path, "source": resolved, "submission": submission}
             if recommendation_reason.strip():
                 app.team_store.add_recommendation(existing_rel_path, actor.id, recommendation_reason)  # type: ignore[attr-defined]
+            try_prefetch_arxiv_markdown(existing_rel_path)
             return {"status": "existing", "rel_path": existing_rel_path, "source": resolved}
 
         temp_path = download_remote_pdf(resolved["download_url"])
@@ -1901,20 +3129,11 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             source_url=resolved["source_url"],
             imported_by_user_id=actor.id,
         )
+        try_prefetch_arxiv_markdown(rel_path)
         if recommendation_reason.strip():
             app.team_store.add_recommendation(rel_path, actor.id, recommendation_reason)  # type: ignore[attr-defined]
 
-        auto_prompts = app.prompt_store.auto_prompts()  # type: ignore[attr-defined]
-        submission = {"queued": 0, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []}
-        if auto_prompts:
-            submission = app.job_queue.submit(  # type: ignore[attr-defined]
-                [rel_path],
-                [prompt.slug for prompt in auto_prompts],
-                force=False,
-                source="remote-import",
-                requested_by_user_id=actor.id,
-                requested_by_display_name=actor.display_name,
-            )
+        submission = submit_remote_import_jobs_with_force([rel_path], actor, source="remote-import", force=False)
         return {"status": result["status"], "rel_path": rel_path, "source": resolved, "submission": submission}
 
     def ensure_prompt_run_metadata(paper: PaperRecord, prompts: list[PromptDefinition]) -> None:
@@ -2119,7 +3338,19 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         selected_prompt_html: Markup | None = None
         selected_prompt_info: dict[str, Any] | None = None
         selected_prompt_job: dict[str, Any] | None = None
+        selected_share_payload: dict[str, str] | None = None
         viewer_tabs: list[dict[str, Any]] = []
+        selected_arxiv_markdown_status: dict[str, Any] = {
+            "available": False,
+            "cached": False,
+            "arxiv_id": None,
+            "source_url": None,
+            "markdown_url": None,
+            "markdown_rel_path": None,
+            "metadata_rel_path": None,
+            "fetched_at": None,
+            "char_count": None,
+        }
         selected_paper_context: dict[str, Any] = {
             "recommendations": [],
             "tags": [],
@@ -2139,8 +3370,10 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         }
 
         if selected_paper:
+            selected_share_payload = share_payload_for_paper(selected_paper)
             if selected_paper.preview_text:
                 preview_paragraphs = [chunk.strip() for chunk in selected_paper.preview_text.split("\n\n") if chunk.strip()]
+            selected_arxiv_markdown_status = app.library.arxiv_markdown_status_for_rel_path(selected_paper.rel_path)  # type: ignore[attr-defined]
             selected_paper_context = app.team_store.paper_context(  # type: ignore[attr-defined]
                 selected_paper.rel_path,
                 current_user_id(),
@@ -2220,6 +3453,8 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             selected_prompt_html=selected_prompt_html,
             selected_prompt_info=selected_prompt_info,
             selected_prompt_job=selected_prompt_job,
+            selected_share_payload=selected_share_payload,
+            selected_arxiv_markdown_status=selected_arxiv_markdown_status,
             selected_paper_context=selected_paper_context,
             selected_chat_context=selected_chat_context,
             recommendation_feed=recommendation_feed,
@@ -2227,6 +3462,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             active_prompt_count=len(active_prompts),
             library_root=app.config["LIBRARY_ROOT"],
             initial_job_snapshot=app.job_queue.snapshot(),  # type: ignore[attr-defined]
+            initial_action_snapshot=app.action_queue.snapshot(),  # type: ignore[attr-defined]
         )
 
     @app.get("/tool-panels/<panel_name>")
@@ -2303,57 +3539,28 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         if not files or not any(file.filename for file in files):
             flash("先选至少一个文件，再开始上传。", "error")
             return redirect_to_index(current_folder or target_folder, query, sort_by, show_done=show_done)
+        if actor is None:
+            flash("请先登录。", "error")
+            return redirect_to_index(current_folder or target_folder, query, sort_by, show_done=show_done)
 
-        saved_rel_paths: list[str] = []
-        saved = 0
-        duplicate_count = 0
+        staged_files: list[dict[str, Any]] = []
         error_count = 0
         for file in files:
             try:
-                result = process_uploaded_file(
-                    file,
-                    target_folder=target_folder,
-                    current_folder=current_folder or target_folder,
-                    query=query,
-                    sort_by=sort_by,
-                    submit_auto_prompts=False,
-                    show_done=show_done,
-                )
+                staged_files.append(stage_uploaded_file(file))
             except ValueError as exc:
-                flash(str(exc), "error")
-                continue
-
-            if result["status"] == "saved" and result["saved_rel_path"]:
-                saved += 1
-                saved_rel_paths.append(result["saved_rel_path"])
-                flash(result["message"], "success")
-            elif result["status"] == "duplicate":
-                duplicate_count += 1
-                flash(result["message"], "success")
-            else:
                 error_count += 1
-                flash(result["message"], "error")
+                flash(str(exc), "error")
 
-        if saved:
-            flash(f"这次成功上传了 {saved} 个文件。", "success")
-            auto_prompts = app.prompt_store.auto_prompts()  # type: ignore[attr-defined]
-            if auto_prompts:
-                actor = current_user()
-                submission = app.job_queue.submit(  # type: ignore[attr-defined]
-                    saved_rel_paths,
-                    [prompt.slug for prompt in auto_prompts],
-                    force=False,
-                    source="upload",
-                    requested_by_user_id=actor.id if actor else None,
-                    requested_by_display_name=actor.display_name if actor else None,
-                )
-                flash_submission_summary(submission, action_label="上传完成后，后续分析也已经排上")
-        if duplicate_count:
-            flash(f"检测到 {duplicate_count} 个重复文件，已经自动跳过。", "success")
-        if error_count and not saved:
-            flash(f"有 {error_count} 个文件没有上传成功。", "error")
-        selected_rel_path = saved_rel_paths[0] if saved_rel_paths else None
-        return redirect_to_index(current_folder or target_folder, query, sort_by, selected_rel_path, "source", show_done=show_done)
+        if not staged_files:
+            flash("没有可处理的上传文件。", "error")
+            return redirect_to_index(current_folder or target_folder, query, sort_by, show_done=show_done)
+
+        task = submit_upload_import_action(staged_files, target_folder, actor)
+        flash(f"后台上传整理任务已开始：{task.title}。上传和分析已经拆开，页面不会再卡住。", "success")
+        if error_count:
+            flash(f"有 {error_count} 个文件因为格式问题没有进入后台整理。", "error")
+        return redirect_to_index(current_folder or target_folder, query, sort_by, show_done=show_done)
 
     @app.post("/upload-file")
     def upload_file() -> Any:
@@ -2369,24 +3576,25 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
 
         if file is None or not file.filename:
             return {"status": "error", "message": "先选一个文件再上传。"}, 400
+        if actor is None:
+            return {"status": "error", "message": "请先登录。"}, 401
 
         try:
-            result = process_uploaded_file(
-                file,
-                target_folder=target_folder,
-                current_folder=current_folder or target_folder,
-                query=query,
-                sort_by=sort_by,
-                submit_auto_prompts=True,
-                show_done=show_done,
-            )
+            staged = stage_uploaded_file(file)
+            task = submit_upload_import_action([staged], target_folder, actor)
         except ValueError as exc:
             return {"status": "error", "message": str(exc)}, 400
         except Exception as exc:
             return {"status": "error", "message": f"上传没成功：{exc}"}, 500
 
-        status_code = 200 if result["status"] in {"saved", "duplicate"} else 400
-        return result, status_code
+        return {
+            "status": "queued",
+            "message": "文件已上传到服务器，后台正在查重、入库并安排分析。",
+            "task_id": task.id,
+            "task_title": task.title,
+            "saved_rel_path": None,
+            "visible_in_current_view": False,
+        }, 200
 
     @app.post("/folders")
     def create_folder_route() -> Any:
@@ -2576,11 +3784,8 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
         try:
             ensure_paper_metadata(rel_path)
-            tags = app.library.generate_ai_tags(  # type: ignore[attr-defined]
-                rel_path,
-                triggered_by_user_id=admin_user.id,
-            )
-            flash(f"AI 标签已刷新：{', '.join(tags)}", "success")
+            task = submit_ai_tag_action(rel_path, admin_user)
+            flash(f"AI 标签刷新任务已开始：{task.title}", "success")
         except (FileNotFoundError, ValueError, RuntimeError) as exc:
             flash(f"AI 标签生成失败：{exc}", "error")
         return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
@@ -2860,14 +4065,14 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         show_done = parse_checkbox(request.form.get("show_done"))
         target = request.form.get("import_target", "")
         recommendation_reason = request.form.get("recommendation_reason", "")
+        actor = current_user()
+        if actor is None:
+            flash("请先登录。", "error")
+            return redirect_to_index(current_folder, query, sort_by, show_done=show_done)
         try:
-            result = import_remote_paper(target, recommendation_reason)
-            if result["status"] == "existing":
-                flash("这篇论文已经在库里了，推荐理由也一并记下了。", "success")
-            else:
-                flash("论文已经导入。", "success")
-                flash_submission_summary(result.get("submission", {}), action_label="导入完成后，后续分析也已经排上")
-            return redirect_to_index(current_folder, query, sort_by, result["rel_path"], "source", show_done=show_done)
+            task = submit_remote_import_action(target, recommendation_reason, actor)
+            flash(f"后台导入任务已开始：{task.title}。页面不会再卡住，导入结果会显示在“后台任务”里。", "success")
+            return redirect_to_index(current_folder, query, sort_by, show_done=show_done)
         except Exception as exc:
             flash(f"导入没成功：{exc}", "error")
             return redirect_to_index(current_folder, query, sort_by, show_done=show_done)
@@ -3026,6 +4231,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             source_root=source_root,
             source_groups=source_groups,
             source_day_count=len(day_records),
+            initial_action_snapshot=app.action_queue.snapshot(),  # type: ignore[attr-defined]
         )
 
     @app.get("/insights")
@@ -3176,17 +4382,13 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             flash("先选至少一篇论文。", "error")
             return redirect(url_for("sources_index"))
 
-        summary = import_source_day_papers(day_record, selected)
-        if summary["saved_rel_paths"]:
-            flash(
-                f"已经把 {len(summary['saved_rel_paths'])} 篇论文导入到 `{summary['target_folder']}`。",
-                "success",
-            )
-            flash_submission_summary(summary["submission"], action_label="导入完成后，后续分析也已经排上")
-        if summary["duplicate_count"]:
-            flash(f"有 {summary['duplicate_count']} 篇论文已经在库里了，所以这次跳过。", "success")
-        for message in summary["error_messages"]:
-            flash(message, "error")
+        actor = current_user()
+        if actor is None:
+            flash("请先登录。", "error")
+            return redirect(url_for("sources_index"))
+
+        task = submit_source_import_action(day_record, selected, actor)
+        flash(f"后台导入任务已开始：{task.title}。页面不会卡住，结果会显示在“后台任务”里。", "success")
         return redirect(url_for("sources_index"))
 
     @app.post("/ai-summary")
@@ -3215,6 +4417,10 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     def jobs_status() -> Any:
         rel_path = request.args.get("paper", "").strip("/") or None
         return app.job_queue.snapshot(rel_path=rel_path)  # type: ignore[attr-defined]
+
+    @app.get("/actions/status")
+    def actions_status() -> Any:
+        return app.action_queue.snapshot()  # type: ignore[attr-defined]
 
     @app.post("/jobs/config")
     def jobs_config_route() -> Any:

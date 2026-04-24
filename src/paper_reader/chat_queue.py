@@ -82,6 +82,7 @@ class PaperChatQueue:
     def _process_job(self, job: ChatJob) -> None:
         try:
             document_path = Path(self.library.resolve_relative_path(job.rel_path))
+            arxiv_markdown = self.library.ensure_arxiv_markdown_for_rel_path(job.rel_path)
             prompt_contexts = self.prompt_context_loader(job.rel_path, self.prompt_store.list_prompts())
             answer = answer_question_about_document(
                 document_path,
@@ -89,6 +90,7 @@ class PaperChatQueue:
                 visibility=job.visibility,
                 history=job.history,
                 prompt_contexts=prompt_contexts,
+                arxiv_markdown_path=(arxiv_markdown.markdown_path if arxiv_markdown is not None else None),
                 model=job.model,
             )
             self.team_store.update_chat_message(

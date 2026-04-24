@@ -14,6 +14,34 @@
     </div>
   </div>
 
+  <details class="tool-panel card" open>
+    <summary>后台任务</summary>
+    <div class="jobs-panel-head">
+      <div class="jobs-controls">
+        <div class="tool-hint">来源归档导入会在后台执行；你可以继续浏览其他日期，结果会自动刷新。</div>
+      </div>
+      <div class="job-summary-strip">
+        <div class="job-summary-card">
+          <span>正在执行</span>
+          <strong id="action-running-count">{{ initial_action_snapshot.running_count }}/{{ initial_action_snapshot.max_concurrency }}</strong>
+        </div>
+        <div class="job-summary-card">
+          <span>等待执行</span>
+          <strong id="action-queued-count">{{ initial_action_snapshot.queued_count }}</strong>
+        </div>
+        <div class="job-summary-card">
+          <span>活跃任务</span>
+          <strong id="action-active-count">{{ initial_action_snapshot.active_count }}</strong>
+        </div>
+        <div class="job-summary-card">
+          <span>并发上限</span>
+          <strong id="action-max-concurrency">{{ initial_action_snapshot.max_concurrency }}</strong>
+        </div>
+      </div>
+    </div>
+    <div id="action-dashboard" class="job-dashboard"></div>
+  </details>
+
   {% if source_groups %}
     <div class="sources-index-grid">
       {% for year_group in source_groups %}
@@ -111,8 +139,150 @@
 </section>
 {% endblock %}
 {% block scripts %}
+  <script id="initial-action-snapshot" type="application/json">{{ initial_action_snapshot | tojson }}</script>
   <script>
     (() => {
+      const actionDashboard = document.getElementById("action-dashboard");
+      const initialActionData = JSON.parse(document.getElementById("initial-action-snapshot").textContent || "{\"actions\":[]}");
+      const actionRunningCountNode = document.getElementById("action-running-count");
+      const actionQueuedCountNode = document.getElementById("action-queued-count");
+      const actionActiveCountNode = document.getElementById("action-active-count");
+      const actionMaxConcurrencyNode = document.getElementById("action-max-concurrency");
+
+      function escapeHtml(value) {
+        return String(value || "").replace(/[&<>"']/g, (char) => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          "\"": "&quot;",
+          "'": "&#39;",
+        }[char]));
+      }
+
+      function statusLabel(status) {
+        return {
+          queued: "等待处理",
+          running: "正在处理",
+          resolving: "正在识别",
+          downloading: "正在下载",
+          importing: "正在入库",
+          saved: "已收好",
+          existing: "已在库中",
+          duplicate: "已跳过重复",
+          completed: "已完成",
+          failed: "失败",
+          stopped: "已停止",
+        }[status] || status;
+      }
+
+      function formatActionItemLine(item) {
+        const source = item.source || {};
+        const sourceType = source.source_type || "unknown";
+        const sourceLabel = {
+          arxiv: "arXiv",
+          openreview: "OpenReview PDF",
+          pdf_url: "PDF 链接",
+          huggingface_daily: "来源归档",
+          upload: "上传文件",
+        }[sourceType] || sourceType;
+        const relPath = item.rel_path ? ` → ${escapeHtml(item.rel_path)}` : "";
+        return `<li><strong>[${escapeHtml(sourceLabel)}]</strong> ${escapeHtml(item.target || item.title || item.key || "未知目标")} · ${escapeHtml(statusLabel(item.status))} · ${escapeHtml(item.message || "")}${relPath}</li>`;
+      }
+
+      function renderActionResultDetails(action) {
+        const result = action.result || {};
+        const items = Array.isArray(result.items) ? result.items : [];
+        if (!items.length) return "";
+        const summary = result.summary || {};
+        const summaryLine = `新导入 ${summary.saved || 0} · 重复 ${summary.duplicate || 0} · 已存在 ${summary.existing || 0} · 失败 ${summary.failed || 0}`;
+        return `
+          <details class="action-result-details">
+            <summary>查看逐条结果（${items.length} 项）</summary>
+            <div class="action-result-body">
+              <p class="job-result">${escapeHtml(summaryLine)}</p>
+              <ul class="action-result-list">${items.map(formatActionItemLine).join("")}</ul>
+            </div>
+          </details>
+        `;
+      }
+
+      function renderActionCard(action) {
+        return `
+          <article class="job-card ${action.status}">
+            <div class="job-card-top">
+              <div>
+                <strong>${escapeHtml(action.title || action.kind || "后台任务")}</strong>
+                <span>${escapeHtml(action.requested_by_display_name || "")}</span>
+              </div>
+              <span class="job-status">${escapeHtml(statusLabel(action.status))}</span>
+            </div>
+            <div class="job-progress"><span style="width: ${Number(action.progress || 0)}%"></span></div>
+            <div class="job-meta">
+              <span>${Number(action.progress || 0)}%</span>
+              <span>${escapeHtml(action.updated_at || "")}</span>
+            </div>
+            <p class="job-message">${escapeHtml(action.message || "")}</p>
+            ${action.error ? `<p class="job-error">${escapeHtml(action.error)}</p>` : ""}
+            ${renderActionResultDetails(action)}
+          </article>
+        `;
+      }
+
+      function renderActions(snapshot) {
+        if (!actionDashboard) return;
+        const actions = Array.isArray(snapshot.actions) ? snapshot.actions : [];
+        if (actionRunningCountNode) actionRunningCountNode.textContent = `${Number(snapshot.running_count || 0)}/${Number(snapshot.max_concurrency || 0)}`;
+        if (actionQueuedCountNode) actionQueuedCountNode.textContent = String(snapshot.queued_count || 0);
+        if (actionActiveCountNode) actionActiveCountNode.textContent = String(snapshot.active_count || 0);
+        if (actionMaxConcurrencyNode) actionMaxConcurrencyNode.textContent = String(snapshot.max_concurrency || 0);
+        if (!actions.length) {
+          actionDashboard.innerHTML = '<div class="job-dashboard-empty">现在没有后台任务。</div>';
+          return;
+        }
+        const latestRemoteAction = actions.find((action) => action.kind === "remote-import") || null;
+        const primaryActions = actions.filter((action) => action.kind !== "remote-import" || action === latestRemoteAction);
+        const historicalRemoteActions = latestRemoteAction
+          ? actions.filter((action) => action.kind === "remote-import" && action !== latestRemoteAction)
+          : actions.filter((action) => action.kind === "remote-import");
+        const historySection = historicalRemoteActions.length
+          ? `
+            <details class="action-history-details">
+              <summary>历史导入信息（${historicalRemoteActions.length} 条）</summary>
+              <div class="action-history-grid">
+                ${historicalRemoteActions.map(renderActionCard).join("")}
+              </div>
+            </details>
+          `
+          : "";
+        actionDashboard.innerHTML = `${primaryActions.map(renderActionCard).join("")}${historySection}`;
+      }
+
+      let actionRefreshTimer = null;
+
+      function scheduleActionRefresh(delay) {
+        if (!actionDashboard) return;
+        if (actionRefreshTimer) window.clearTimeout(actionRefreshTimer);
+        actionRefreshTimer = window.setTimeout(() => {
+          refreshActions().catch((error) => {
+            console.error("Failed to refresh actions", error);
+            scheduleActionRefresh(15000);
+          });
+        }, delay);
+      }
+
+      async function refreshActions() {
+        if (!actionDashboard) return;
+        if (document.hidden) {
+          scheduleActionRefresh(30000);
+          return;
+        }
+        const response = await fetch("{{ url_for('actions_status') }}", { cache: "no-store" });
+        if (!response.ok) return;
+        const snapshot = await response.json();
+        renderActions(snapshot);
+        scheduleActionRefresh((snapshot.active_count || 0) > 0 ? 4000 : 15000);
+      }
+
       document.querySelectorAll("[data-day-form]").forEach((button) => {
         button.addEventListener("click", () => {
           const form = button.closest("form");
@@ -124,6 +294,14 @@
             checkbox.checked = shouldSelectAll;
           });
         });
+      });
+
+      renderActions(initialActionData);
+      scheduleActionRefresh((initialActionData.active_count || 0) > 0 ? 2500 : 12000);
+      document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+          refreshActions().catch((error) => console.error("Failed to refresh actions", error));
+        }
       });
     })();
   </script>

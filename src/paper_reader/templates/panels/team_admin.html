@@ -6,98 +6,123 @@
       <strong>只有管理员可以添加账号、调整角色和重置密码。</strong>
     </div>
   {% else %}
-    <div class="prompt-manager-grid">
-      <section class="prompt-card new-prompt-card">
+    <div class="team-admin-stack">
+      <section class="prompt-card new-prompt-card team-admin-create-card">
         <div class="prompt-card-head">
           <div>
             <strong>添加账号</strong>
-            <span>由管理员统一创建大家可登录的账号</span>
+            <span>精简创建入口，固定在顶部，方便管理员快速录入新成员。</span>
           </div>
         </div>
-        <form class="prompt-form" action="{{ url_for('team_user_save_route') }}" method="post">
+        <form class="prompt-form team-admin-create-form" action="{{ url_for('team_user_save_route') }}" method="post">
           <input type="hidden" name="folder" value="{{ current_folder }}">
           <input type="hidden" name="q" value="{{ query }}">
           <input type="hidden" name="sort" value="{{ sort_by }}">
           <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
           <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
           <input type="hidden" name="tab" value="{{ selected_tab }}">
-          <label>
-            <span>用户名</span>
-            <input type="text" name="username" placeholder="例如：alice">
-          </label>
-          <label>
-            <span>显示名</span>
-            <input type="text" name="display_name" placeholder="例如：Alice">
-          </label>
-          <label>
-            <span>登录密码</span>
-            <input type="password" name="password" placeholder="先设置一个初始密码">
-          </label>
-          <label>
-            <span>身份</span>
-            <select name="role">
-              <option value="member">member</option>
-              <option value="admin">admin</option>
-            </select>
-          </label>
+          <div class="team-admin-create-grid">
+            <label>
+              <span>用户名</span>
+              <input type="text" name="username" placeholder="例如：alice">
+            </label>
+            <label>
+              <span>显示名</span>
+              <input type="text" name="display_name" placeholder="例如：Alice">
+            </label>
+            <label>
+              <span>初始密码</span>
+              <input type="password" name="password" placeholder="先设置一个密码">
+            </label>
+            <label>
+              <span>身份</span>
+              <select name="role">
+                <option value="member">member</option>
+                <option value="admin">admin</option>
+              </select>
+            </label>
+          </div>
           <div class="tool-actions">
             <button type="submit">创建账号</button>
           </div>
         </form>
       </section>
 
-      <section class="prompt-card">
-        <div class="prompt-card-head">
-          <div>
-            <strong>账号列表</strong>
-            <span>{{ team_users|length }} 人</span>
+      <details class="prompt-card team-admin-users-card" data-team-admin-panel open>
+        <summary class="team-admin-users-summary">
+          <div class="prompt-card-head">
+            <div>
+              <strong>用户列表</strong>
+              <span>{{ team_users|length }} 人</span>
+            </div>
+            <span class="team-admin-summary-hint">可折叠 / 可滚动</span>
+          </div>
+        </summary>
+
+        <div class="team-admin-users-body">
+          <div class="team-admin-head-actions">
+            <input
+              type="search"
+              class="team-admin-search-input"
+              data-team-user-search
+              placeholder="搜索用户名 / 显示名 / 角色"
+              aria-label="搜索用户"
+            >
+            <button type="button" class="secondary" data-team-user-toggle="expand">全部展开</button>
+            <button type="button" class="secondary" data-team-user-toggle="collapse">全部折叠</button>
+          </div>
+          <div class="team-admin-user-list-shell">
+            <div class="team-note-list team-admin-user-list" data-team-user-list>
+            {% for user in team_users %}
+              <details class="team-user-card" data-team-user-item data-team-user-key="{{ (user.username ~ ' ' ~ user.display_name ~ ' ' ~ user.role)|lower }}">
+                <summary class="team-user-summary">
+                  <div class="prompt-card-head compact-head team-user-head">
+                    {{ render_avatar(avatar_url_for(user), avatar_initials(user.display_name), 'avatar avatar-md team-user-avatar') }}
+                    <div>
+                      <strong>{{ user.username }}</strong>
+                      <span>{{ user.display_name }} · 创建于 {{ user.created_at }}</span>
+                    </div>
+                    <span>{{ user.role }} · {{ '可以登录' if user.is_active else '已停用' }}</span>
+                  </div>
+                </summary>
+                <form class="prompt-form team-user-form" action="{{ url_for('team_user_update_route') }}" method="post">
+                  <input type="hidden" name="folder" value="{{ current_folder }}">
+                  <input type="hidden" name="q" value="{{ query }}">
+                  <input type="hidden" name="sort" value="{{ sort_by }}">
+                  <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+                  <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
+                  <input type="hidden" name="tab" value="{{ selected_tab }}">
+                  <input type="hidden" name="user_id" value="{{ user.id }}">
+                  <label>
+                    <span>显示名</span>
+                    <input type="text" name="display_name" value="{{ user.display_name }}">
+                  </label>
+                  <label>
+                    <span>身份</span>
+                    <select name="role">
+                      <option value="member" {% if user.role == 'member' %}selected{% endif %}>member</option>
+                      <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>admin</option>
+                    </select>
+                  </label>
+                  <label class="checkbox-line">
+                    <input type="checkbox" name="is_active" {% if user.is_active %}checked{% endif %}> 保持可登录
+                  </label>
+                  <label>
+                    <span>重置密码</span>
+                    <input type="password" name="new_password" placeholder="留空表示不修改">
+                  </label>
+                  <div class="tool-actions split-actions">
+                    <button type="submit">保存账号设置</button>
+                  </div>
+                </form>
+              </details>
+            {% else %}
+              <p class="team-empty-copy">还没有添加账号。</p>
+            {% endfor %}
+            </div>
           </div>
         </div>
-        <div class="team-note-list">
-          {% for user in team_users %}
-            <form class="prompt-form team-user-form" action="{{ url_for('team_user_update_route') }}" method="post">
-              <input type="hidden" name="folder" value="{{ current_folder }}">
-              <input type="hidden" name="q" value="{{ query }}">
-              <input type="hidden" name="sort" value="{{ sort_by }}">
-              <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
-              <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
-              <input type="hidden" name="tab" value="{{ selected_tab }}">
-              <input type="hidden" name="user_id" value="{{ user.id }}">
-              <div class="prompt-card-head compact-head team-user-head">
-                {{ render_avatar(avatar_url_for(user), avatar_initials(user.display_name), 'avatar avatar-md team-user-avatar') }}
-                <div>
-                  <strong>{{ user.username }}</strong>
-                  <span>创建于 {{ user.created_at }}</span>
-                </div>
-                <span>{{ user.role }} · {{ '可以登录' if user.is_active else '已停用' }}</span>
-              </div>
-              <label>
-                <span>显示名</span>
-                <input type="text" name="display_name" value="{{ user.display_name }}">
-              </label>
-              <label>
-                <span>身份</span>
-                <select name="role">
-                  <option value="member" {% if user.role == 'member' %}selected{% endif %}>member</option>
-                  <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>admin</option>
-                </select>
-              </label>
-              <label class="checkbox-line">
-                <input type="checkbox" name="is_active" {% if user.is_active %}checked{% endif %}> 保持可登录
-              </label>
-              <label>
-                <span>重置密码</span>
-                <input type="password" name="new_password" placeholder="留空表示不修改">
-              </label>
-              <div class="tool-actions split-actions">
-                <button type="submit">保存账号设置</button>
-              </div>
-            </form>
-          {% else %}
-            <p class="team-empty-copy">还没有添加账号。</p>
-          {% endfor %}
-        </div>
-      </section>
+      </details>
     </div>
   {% endif %}
 </div>
