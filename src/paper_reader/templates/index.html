@@ -1174,6 +1174,11 @@
         shared: document.querySelector('[data-chat-count="shared"]'),
         private: document.querySelector('[data-chat-count="private"]'),
       };
+      const chatAutoScrollThreshold = 48;
+      const initialChatThreadState = {
+        shared: { count: parseCountText(chatCountNodes.shared), lastMessageId: null },
+        private: { count: parseCountText(chatCountNodes.private), lastMessageId: null },
+      };
       const initialData = JSON.parse(document.getElementById("initial-job-snapshot").textContent || "{\"jobs\":[]}");
       const runningCountNode = document.getElementById("job-running-count");
       const queuedCountNode = document.getElementById("job-queued-count");
@@ -1515,6 +1520,11 @@
         }[char]));
       }
 
+      function parseCountText(node) {
+        const parsed = Number.parseInt((node && node.textContent) || "0", 10);
+        return Number.isFinite(parsed) ? parsed : 0;
+      }
+
       function statusLabel(status) {
         return {
           queued: "等待处理",
@@ -1832,22 +1842,54 @@
         `;
       }
 
+      const chatThreadState = {
+        shared: { ...initialChatThreadState.shared },
+        private: { ...initialChatThreadState.private },
+      };
+
+      function isChatThreadNearBottom(container) {
+        if (!container || container.clientHeight <= 0) return false;
+        return (container.scrollHeight - container.clientHeight - container.scrollTop) <= chatAutoScrollThreshold;
+      }
+
+      function lastChatMessageId(messages) {
+        if (!Array.isArray(messages) || !messages.length) return null;
+        const lastMessage = messages[messages.length - 1];
+        const id = Number(lastMessage && lastMessage.id);
+        return Number.isFinite(id) ? id : null;
+      }
+
       function renderChatThread(visibility, thread) {
         const container = chatThreads[visibility];
         const countNode = chatCountNodes[visibility];
         if (!container || !thread) return;
         const messages = Array.isArray(thread.messages) ? thread.messages : [];
+        const nextCount = Number(thread.count || messages.length);
+        const previousState = chatThreadState[visibility] || { count: 0, lastMessageId: null };
+        const wasNearBottom = isChatThreadNearBottom(container);
+        const nextLastMessageId = lastChatMessageId(messages);
+        const previousCount = Number(previousState.count || 0);
+        const hasNewMessages = nextCount > previousCount || (
+          nextLastMessageId !== null
+          && previousState.lastMessageId !== null
+          && nextLastMessageId > previousState.lastMessageId
+        );
+
         if (countNode) {
-          countNode.textContent = `${Number(thread.count || messages.length)} 条`;
+          countNode.textContent = `${nextCount} 条`;
         }
         if (!messages.length) {
           container.innerHTML = visibility === "shared"
             ? '<p class="team-empty-copy">这里就是“一起学”，只要大家打开这篇论文，就能接着前面的话题继续往下聊。</p>'
             : '<p class="team-empty-copy">这里就是“我爱学”，适合记只想留给自己看的问题、复现思路和临时笔记。</p>';
+          chatThreadState[visibility] = { count: nextCount, lastMessageId: nextLastMessageId };
           return;
         }
         container.innerHTML = messages.map(renderChatMessage).join("");
-        container.scrollTop = container.scrollHeight;
+        if (wasNearBottom && hasNewMessages) {
+          container.scrollTop = container.scrollHeight;
+        }
+        chatThreadState[visibility] = { count: nextCount, lastMessageId: nextLastMessageId };
       }
 
       function hasPendingChatMessages(context) {
