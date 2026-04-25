@@ -1298,6 +1298,7 @@
       const closeSettingsButton = settingsDrawer ? settingsDrawer.querySelector("[data-close-settings]") : null;
       const settingsResizeHandle = settingsDrawer ? settingsDrawer.querySelector("[data-settings-resize]") : null;
       const fullscreenButtons = Array.from(document.querySelectorAll("[data-fullscreen-target]"));
+      const fullscreenTargets = Array.from(document.querySelectorAll("[data-reader-fullscreen]"));
       const shareButton = document.querySelector("[data-share-button]");
       const shareButtonLabel = shareButton ? shareButton.querySelector("[data-share-label]") : null;
       const shareToast = document.querySelector("[data-share-toast]");
@@ -1562,11 +1563,6 @@
           settingsDrawer.toggleAttribute("inert", !layoutState.settingsOpen);
           settingsDrawer.setAttribute("aria-hidden", layoutState.settingsOpen ? "false" : "true");
         }
-        const layoutRect = layoutRoot.getBoundingClientRect();
-        document.documentElement.style.setProperty("--expanded-reader-top", `${Math.round(layoutRect.top)}px`);
-        document.documentElement.style.setProperty("--expanded-reader-left", `${Math.round(layoutRect.left)}px`);
-        document.documentElement.style.setProperty("--expanded-reader-width", `${Math.round(layoutRect.width)}px`);
-        document.documentElement.style.setProperty("--expanded-reader-height", `${Math.round(layoutRect.height)}px`);
         syncPaneRegions();
         syncPaneButtons();
         applyOrbPosition();
@@ -1710,18 +1706,32 @@
         });
       }
 
+      function setReaderExpanded(target, expanded) {
+        fullscreenTargets.forEach((node) => {
+          node.classList.toggle("is-reader-expanded", expanded && node === target);
+        });
+        document.body.classList.toggle("reader-expanded", Boolean(expanded && target));
+        fullscreenButtons.forEach((button) => {
+          const key = button.dataset.fullscreenTarget || "";
+          const pressed = Boolean(expanded && target && target.dataset.readerFullscreen === key);
+          button.textContent = pressed ? "退出放大" : "全屏阅读";
+          button.setAttribute("aria-pressed", pressed ? "true" : "false");
+        });
+      }
+
       fullscreenButtons.forEach((button) => {
         button.addEventListener("click", () => {
           const key = button.dataset.fullscreenTarget || "";
           const target = document.querySelector(`[data-reader-fullscreen="${CSS.escape(key)}"]`);
           if (!target) return;
-          const expanded = target.classList.toggle("is-reader-expanded");
-          document.body.classList.toggle("reader-expanded", expanded);
-          button.textContent = expanded ? "退出放大" : "全屏阅读";
-          button.setAttribute("aria-pressed", expanded ? "true" : "false");
+          setReaderExpanded(target, !target.classList.contains("is-reader-expanded"));
         });
       });
       document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && document.body.classList.contains("reader-expanded")) {
+          setReaderExpanded(null, false);
+          return;
+        }
         if (event.key === "Escape" && layoutState.settingsOpen) {
           setSettingsOpen(false);
         }
