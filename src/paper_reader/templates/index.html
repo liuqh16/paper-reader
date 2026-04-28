@@ -237,15 +237,23 @@
       {% set summary_tags = tag_groups.summary %}
       {% set overflow_tags = tag_groups.overflow %}
       {% if selected_tab == 'source' %}
+      {% set paper_date_editable = not selected_arxiv_markdown_status.arxiv_id %}
+      {% set paper_date_precision = selected_paper.date_precision if selected_paper.date_precision in ['year', 'month', 'day'] else 'month' %}
+      {% set paper_date_year_value = selected_paper.extracted_date[:4] if selected_paper.extracted_date else '' %}
+      {% set paper_date_month_value = selected_paper.extracted_date[:7] if selected_paper.extracted_date and selected_paper.extracted_date|length >= 7 else '' %}
+      {% set paper_date_day_value = selected_paper.extracted_date[:10] if selected_paper.extracted_date and selected_paper.extracted_date|length >= 10 else '' %}
       <section class="viewer-context-panel">
         <div class="viewer-context-bar">
           <div class="viewer-meta-grid">
-            {% if selected_paper.extracted_date %}
-              <div class="viewer-meta-pill">
-                <small>论文日期</small>
-                <strong>{{ selected_paper.extracted_date }}</strong>
+            <div class="viewer-meta-pill viewer-meta-pill-date">
+              <small>论文日期</small>
+              <div class="viewer-meta-value-row">
+                <strong>{{ selected_paper.extracted_date or '无' }}</strong>
+                {% if paper_date_editable %}
+                  <button type="button" class="ghost-button viewer-meta-inline-button" data-paper-date-open>修改</button>
+                {% endif %}
               </div>
-            {% endif %}
+            </div>
             <div class="viewer-meta-pill">
               <small>团队推荐</small>
               <strong>{{ selected_paper_context.recommendation_count }} 人</strong>
@@ -326,6 +334,56 @@
         </div>
       </section>
 
+      {% if paper_date_editable %}
+        <dialog class="paper-date-dialog" data-paper-date-dialog aria-labelledby="paper-date-dialog-title">
+          <form action="{{ url_for('paper_date_route') }}" method="post" class="paper-date-dialog-form">
+            <input type="hidden" name="folder" value="{{ current_folder }}">
+            <input type="hidden" name="q" value="{{ query }}">
+            <input type="hidden" name="sort" value="{{ sort_by }}">
+            <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+            <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+            <input type="hidden" name="tab" value="{{ selected_tab }}">
+            <div class="paper-date-dialog-head">
+              <div>
+                <h3 id="paper-date-dialog-title">修改论文日期</h3>
+                <p>这篇论文没有 arXiv ID，可以手动指定年份、年月或具体日期。</p>
+              </div>
+              <button type="button" class="ghost-button paper-date-dialog-close" data-paper-date-close aria-label="关闭">×</button>
+            </div>
+            <fieldset class="paper-date-precision-group">
+              <legend>日期精度</legend>
+              <label>
+                <input type="radio" name="precision" value="year" {% if paper_date_precision == 'year' %}checked{% endif %} data-paper-date-precision>
+                <span>年</span>
+              </label>
+              <label>
+                <input type="radio" name="precision" value="month" {% if paper_date_precision == 'month' %}checked{% endif %} data-paper-date-precision>
+                <span>月</span>
+              </label>
+              <label>
+                <input type="radio" name="precision" value="day" {% if paper_date_precision == 'day' %}checked{% endif %} data-paper-date-precision>
+                <span>日</span>
+              </label>
+            </fieldset>
+            <label class="paper-date-dialog-field" data-paper-date-field="year">
+              <span>论文年份</span>
+              <input type="number" name="date_year" value="{{ paper_date_year_value }}" min="1900" max="2100" step="1" inputmode="numeric" autocomplete="off" data-paper-date-value="year" required>
+            </label>
+            <label class="paper-date-dialog-field" data-paper-date-field="month">
+              <span>论文年月</span>
+              <input type="month" name="date_month" value="{{ paper_date_month_value }}" data-paper-date-value="month" required>
+            </label>
+            <label class="paper-date-dialog-field" data-paper-date-field="day">
+              <span>论文日期</span>
+              <input type="date" name="date_day" value="{{ paper_date_day_value }}" data-paper-date-value="day" required>
+            </label>
+            <div class="paper-date-dialog-actions">
+              <button type="button" class="ghost-button" data-paper-date-close>取消</button>
+              <button type="submit">保存日期</button>
+            </div>
+          </form>
+        </dialog>
+      {% endif %}
 
       <div class="viewer-inline-tags-panel" data-collapsible-body="tags-inline" hidden>
         {% if overflow_tags %}
@@ -1350,6 +1408,12 @@
       const shareToastText = shareToast ? shareToast.querySelector("[data-share-toast-text]") : null;
       const shareUndoButton = shareToast ? shareToast.querySelector("[data-share-undo]") : null;
       const shareDismissButton = shareToast ? shareToast.querySelector("[data-share-dismiss]") : null;
+      const paperDateDialog = document.querySelector("[data-paper-date-dialog]");
+      const paperDateOpenButtons = Array.from(document.querySelectorAll("[data-paper-date-open]"));
+      const paperDateCloseButtons = Array.from(document.querySelectorAll("[data-paper-date-close]"));
+      const paperDatePrecisionInputs = paperDateDialog ? Array.from(paperDateDialog.querySelectorAll("[data-paper-date-precision]")) : [];
+      const paperDateFields = paperDateDialog ? Array.from(paperDateDialog.querySelectorAll("[data-paper-date-field]")) : [];
+      const paperDateValueInputs = paperDateDialog ? Array.from(paperDateDialog.querySelectorAll("[data-paper-date-value]")) : [];
       const paneToggleButtons = Array.from(document.querySelectorAll("[data-toggle-pane]"));
       const paneStateButtons = Array.from(document.querySelectorAll("[data-pane-button]"));
       const paneResizers = Array.from(document.querySelectorAll("[data-resizer]"));
@@ -1500,6 +1564,81 @@
         if (!copied) {
           throw new Error("copy_failed");
         }
+      }
+
+      function selectedPaperDatePrecision() {
+        const checked = paperDatePrecisionInputs.find((input) => input.checked);
+        return checked ? checked.value : "month";
+      }
+
+      function syncPaperDatePrecision() {
+        const precision = selectedPaperDatePrecision();
+        paperDateFields.forEach((field) => {
+          const active = field.dataset.paperDateField === precision;
+          field.hidden = !active;
+        });
+        paperDateValueInputs.forEach((input) => {
+          const active = input.dataset.paperDateValue === precision;
+          input.disabled = !active;
+          input.required = active;
+        });
+      }
+
+      function activePaperDateInput() {
+        const precision = selectedPaperDatePrecision();
+        return paperDateValueInputs.find((input) => input.dataset.paperDateValue === precision) || null;
+      }
+
+      function openPaperDateDialog() {
+        if (!paperDateDialog) return;
+        syncPaperDatePrecision();
+        if (typeof paperDateDialog.showModal === "function") {
+          paperDateDialog.showModal();
+        } else {
+          paperDateDialog.setAttribute("open", "open");
+        }
+        window.requestAnimationFrame(() => {
+          const input = activePaperDateInput();
+          if (input) {
+            input.focus();
+            if (typeof input.showPicker === "function") {
+              try {
+                input.showPicker();
+              } catch (error) {
+                // Some browsers only allow showPicker directly in user activation.
+              }
+            }
+          }
+        });
+      }
+
+      function closePaperDateDialog() {
+        if (!paperDateDialog) return;
+        if (typeof paperDateDialog.close === "function") {
+          paperDateDialog.close();
+        } else {
+          paperDateDialog.removeAttribute("open");
+        }
+      }
+
+      paperDatePrecisionInputs.forEach((input) => {
+        input.addEventListener("change", () => {
+          syncPaperDatePrecision();
+          const activeInput = activePaperDateInput();
+          if (activeInput) activeInput.focus();
+        });
+      });
+      syncPaperDatePrecision();
+      paperDateOpenButtons.forEach((button) => {
+        button.addEventListener("click", openPaperDateDialog);
+      });
+      paperDateCloseButtons.forEach((button) => {
+        button.addEventListener("click", closePaperDateDialog);
+      });
+      if (paperDateDialog) {
+        paperDateDialog.addEventListener("click", (event) => {
+          if (event.target === paperDateDialog) closePaperDateDialog();
+        });
       }
 
       async function handleShareClick() {

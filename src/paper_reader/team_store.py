@@ -246,6 +246,8 @@ class TeamStore:
                     preview_text TEXT NOT NULL DEFAULT '',
                     extracted_date TEXT,
                     sort_date TEXT,
+                    date_precision TEXT,
+                    date_source TEXT,
                     file_size INTEGER NOT NULL DEFAULT 0,
                     modified_at TEXT NOT NULL,
                     preview_kind TEXT NOT NULL DEFAULT 'file',
@@ -382,6 +384,17 @@ class TeamStore:
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
                 );
 
+                CREATE TABLE IF NOT EXISTS paper_date_overrides (
+                    paper_id INTEGER PRIMARY KEY,
+                    display_date TEXT NOT NULL,
+                    precision TEXT NOT NULL DEFAULT 'month',
+                    sort_date TEXT NOT NULL,
+                    updated_by_user_id INTEGER,
+                    updated_at TEXT NOT NULL,
+                    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+                    FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_papers_sort_date ON papers(sort_date);
                 CREATE INDEX IF NOT EXISTS idx_papers_display_title ON papers(display_title);
                 CREATE INDEX IF NOT EXISTS idx_papers_folder ON papers(folder);
@@ -396,6 +409,7 @@ class TeamStore:
                 """
             )
             self._ensure_users_avatar_column(conn)
+            self._ensure_papers_date_columns(conn)
             self._seed_roles(conn)
 
     def _seed_roles(self, conn: sqlite3.Connection) -> None:
@@ -408,6 +422,13 @@ class TeamStore:
         columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "avatar_rel_path" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN avatar_rel_path TEXT")
+
+    def _ensure_papers_date_columns(self, conn: sqlite3.Connection) -> None:
+        columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(papers)").fetchall()}
+        if "date_precision" not in columns:
+            conn.execute("ALTER TABLE papers ADD COLUMN date_precision TEXT")
+        if "date_source" not in columns:
+            conn.execute("ALTER TABLE papers ADD COLUMN date_source TEXT")
 
     def _migrate_likes_into_recommendations(self) -> None:
         with self._write_lock:
@@ -753,9 +774,9 @@ class TeamStore:
                         """
                         INSERT INTO papers(
                             rel_path, file_name, folder, extension, title, display_title, preview_text,
-                            extracted_date, sort_date, file_size, modified_at, preview_kind, is_done,
+                            extracted_date, sort_date, date_precision, date_source, file_size, modified_at, preview_kind, is_done,
                             created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT(rel_path) DO UPDATE SET
                             file_name = excluded.file_name,
                             folder = excluded.folder,
@@ -765,6 +786,8 @@ class TeamStore:
                             preview_text = excluded.preview_text,
                             extracted_date = excluded.extracted_date,
                             sort_date = excluded.sort_date,
+                            date_precision = excluded.date_precision,
+                            date_source = excluded.date_source,
                             file_size = excluded.file_size,
                             modified_at = excluded.modified_at,
                             preview_kind = excluded.preview_kind,
@@ -781,6 +804,8 @@ class TeamStore:
                             str(paper.preview_text or "")[:20000],
                             paper.extracted_date,
                             paper.sort_date,
+                            getattr(paper, "date_precision", None),
+                            getattr(paper, "date_source", None),
                             int(paper.file_size),
                             paper.modified_at,
                             paper.preview_kind,
@@ -790,7 +815,135 @@ class TeamStore:
                         ),
                     )
                     paper_id = self._paper_id_for_rel_path_locked(conn, paper.rel_path)
+                    self._persist_manual_date_from_record_locked(conn, paper_id, paper)
+                    self._apply_date_override_to_paper_locked(conn, paper_id)
                     self._ensure_auto_tags_locked(conn, paper_id, paper)
+
+    def all_manual_date_overrides(self) -> dict[str, dict[str, str | None]]:
+        overrides: dict[str, dict[str, str | None]] = {}
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT p.rel_path, o.display_date, o.precision, o.sort_date, o.updated_at
+                FROM paper_date_overrides o
+                JOIN papers p ON p.id = o.paper_id
+                """
+            ).fetchall()
+            for row in rows:
+                overrides[str(row["rel_path"])] = {
+                    "display_date": str(row["display_date"]),
+                    "precision": str(row["precision"] or "month"),
+                    "source": "manual",
+                    "sort_date": str(row["sort_date"]),
+                    "updated_at": str(row["updated_at"]),
+                }
+        return overrides
+
+    def manual_date_overrides_for_rel_paths(self, rel_paths: Iterable[str]) -> dict[str, dict[str, str | None]]:
+        unique_rel_paths = list(dict.fromkeys(path for path in rel_paths if path))
+        if not unique_rel_paths:
+            return {}
+        overrides: dict[str, dict[str, str | None]] = {}
+        with self._connect() as conn:
+            for start in range(0, len(unique_rel_paths), 900):
+                chunk = unique_rel_paths[start : start + 900]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"""
+                    SELECT p.rel_path, o.display_date, o.precision, o.sort_date, o.updated_at
+                    FROM paper_date_overrides o
+                    JOIN papers p ON p.id = o.paper_id
+                    WHERE p.rel_path IN ({placeholders})
+                    """,
+                    chunk,
+                ).fetchall()
+                for row in rows:
+                    overrides[str(row["rel_path"])] = {
+                        "display_date": str(row["display_date"]),
+                        "precision": str(row["precision"] or "month"),
+                        "source": "manual",
+                        "sort_date": str(row["sort_date"]),
+                        "updated_at": str(row["updated_at"]),
+                    }
+        return overrides
+
+    def set_manual_date_override(
+        self,
+        rel_path: str,
+        *,
+        display_date: str,
+        precision: str,
+        sort_date: str,
+        updated_by_user_id: int | None,
+    ) -> None:
+        now = self._timestamp()
+        with self._write_lock:
+            with self._connect() as conn:
+                paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+                if paper_id is None:
+                    raise FileNotFoundError(rel_path)
+                conn.execute(
+                    """
+                    INSERT INTO paper_date_overrides(
+                        paper_id, display_date, precision, sort_date, updated_by_user_id, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(paper_id) DO UPDATE SET
+                        display_date = excluded.display_date,
+                        precision = excluded.precision,
+                        sort_date = excluded.sort_date,
+                        updated_by_user_id = excluded.updated_by_user_id,
+                        updated_at = excluded.updated_at
+                    """,
+                    (paper_id, display_date, precision, sort_date, updated_by_user_id, now),
+                )
+                conn.execute(
+                    """
+                    UPDATE papers
+                    SET extracted_date = ?, sort_date = ?, date_precision = ?, date_source = 'manual', updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (display_date, sort_date, precision, now, paper_id),
+                )
+
+    def migrate_manual_date_overrides(self, payload: dict[str, Any], *, updated_by_user_id: int | None = None) -> int:
+        if not payload:
+            return 0
+        now = self._timestamp()
+        migrated = 0
+        with self._write_lock:
+            with self._connect() as conn:
+                for rel_path, raw in payload.items():
+                    if not isinstance(rel_path, str) or not isinstance(raw, dict):
+                        continue
+                    display_date = str(raw.get("display_date") or "").strip()
+                    precision = str(raw.get("precision") or "month").strip() or "month"
+                    sort_date = str(raw.get("sort_date") or "").strip()
+                    if not display_date or precision not in {"year", "month", "day"} or not sort_date:
+                        continue
+                    paper_id = self._paper_id_for_rel_path_locked(conn, rel_path)
+                    if paper_id is None:
+                        continue
+                    updated_at = str(raw.get("updated_at") or "").strip() or now
+                    cursor = conn.execute(
+                        """
+                        INSERT OR IGNORE INTO paper_date_overrides(
+                            paper_id, display_date, precision, sort_date, updated_by_user_id, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (paper_id, display_date, precision, sort_date, updated_by_user_id, updated_at),
+                    )
+                    if cursor.rowcount <= 0:
+                        continue
+                    conn.execute(
+                        """
+                        UPDATE papers
+                        SET extracted_date = ?, sort_date = ?, date_precision = ?, date_source = 'manual', updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (display_date, sort_date, precision, now, paper_id),
+                    )
+                    migrated += 1
+        return migrated
 
     def rename_paper(self, old_rel_path: str, new_paper: Any) -> None:
         with self._write_lock:
@@ -799,7 +952,7 @@ class TeamStore:
                     """
                     UPDATE papers
                     SET rel_path = ?, file_name = ?, folder = ?, extension = ?, title = ?, display_title = ?,
-                        preview_text = ?, extracted_date = ?, sort_date = ?, file_size = ?, modified_at = ?,
+                        preview_text = ?, extracted_date = ?, sort_date = ?, date_precision = ?, date_source = ?, file_size = ?, modified_at = ?,
                         preview_kind = ?, is_done = ?, updated_at = ?
                     WHERE rel_path = ?
                     """,
@@ -813,6 +966,8 @@ class TeamStore:
                         str(new_paper.preview_text or "")[:20000],
                         new_paper.extracted_date,
                         new_paper.sort_date,
+                        getattr(new_paper, "date_precision", None),
+                        getattr(new_paper, "date_source", None),
                         int(new_paper.file_size),
                         new_paper.modified_at,
                         new_paper.preview_kind,
@@ -822,6 +977,8 @@ class TeamStore:
                     ),
                 )
                 paper_id = self._paper_id_for_rel_path_locked(conn, new_paper.rel_path)
+                self._persist_manual_date_from_record_locked(conn, paper_id, new_paper)
+                self._apply_date_override_to_paper_locked(conn, paper_id)
                 self._ensure_auto_tags_locked(conn, paper_id, new_paper)
 
     def delete_paper(self, rel_path: str) -> None:
@@ -1701,6 +1858,46 @@ class TeamStore:
     def _paper_id_for_rel_path_locked(self, conn: sqlite3.Connection, rel_path: str) -> int | None:
         row = conn.execute("SELECT id FROM papers WHERE rel_path = ?", (rel_path,)).fetchone()
         return int(row["id"]) if row is not None else None
+
+    def _persist_manual_date_from_record_locked(self, conn: sqlite3.Connection, paper_id: int | None, paper: Any) -> None:
+        if paper_id is None or getattr(paper, "date_source", None) != "manual":
+            return
+        display_date = str(getattr(paper, "extracted_date", "") or "").strip()
+        sort_date = str(getattr(paper, "sort_date", "") or "").strip()
+        precision = str(getattr(paper, "date_precision", "") or "month").strip() or "month"
+        if not display_date or not sort_date or precision not in {"year", "month", "day"}:
+            return
+        now = self._timestamp()
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO paper_date_overrides(
+                paper_id, display_date, precision, sort_date, updated_by_user_id, updated_at
+            ) VALUES (?, ?, ?, ?, NULL, ?)
+            """,
+            (paper_id, display_date, precision, sort_date, now),
+        )
+
+    def _apply_date_override_to_paper_locked(self, conn: sqlite3.Connection, paper_id: int | None) -> None:
+        if paper_id is None:
+            return
+        row = conn.execute(
+            """
+            SELECT display_date, precision, sort_date
+            FROM paper_date_overrides
+            WHERE paper_id = ?
+            """,
+            (paper_id,),
+        ).fetchone()
+        if row is None:
+            return
+        conn.execute(
+            """
+            UPDATE papers
+            SET extracted_date = ?, sort_date = ?, date_precision = ?, date_source = 'manual', updated_at = ?
+            WHERE id = ?
+            """,
+            (str(row["display_date"]), str(row["sort_date"]), str(row["precision"] or "month"), self._timestamp(), paper_id),
+        )
 
     def _ensure_auto_tags_locked(self, conn: sqlite3.Connection, paper_id: int | None, paper: Any) -> None:
         if paper_id is None:

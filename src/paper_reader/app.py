@@ -51,6 +51,7 @@ from .team_store import TeamStore, TeamUser, flatten_comments, slugify_text
 
 CACHE_FILE_NAME = ".paper_reader_index.json"
 DONE_INDEX_FILE_NAME = ".paper_reader_done_index.json"
+MANUAL_DATE_FILE_NAME = ".paper-reader-manual-dates.json"
 SUMMARY_DIR_NAME = ".paper-reader-ai"
 DONE_DIR_NAME = "DONE"
 AVATAR_DIR_NAME = ".paper-reader-avatars"
@@ -356,6 +357,7 @@ class PaperLibrary:
         self.root.mkdir(parents=True, exist_ok=True)
         self.cache_path = self.root / CACHE_FILE_NAME
         self.done_index_path = self.root / DONE_INDEX_FILE_NAME
+        self.manual_date_path = self.root / MANUAL_DATE_FILE_NAME
         self.summary_root = self.root / SUMMARY_DIR_NAME
         self.summary_root.mkdir(parents=True, exist_ok=True)
         self.arxiv_markdown_root = self.root / ARXIV_MARKDOWN_DIR_NAME
@@ -364,7 +366,9 @@ class PaperLibrary:
         self.team_store = team_store
         self._hash_cache: dict[str, tuple[float, int, str]] = {}
         self._scan_lock = threading.RLock()
+        self._manual_date_lock = threading.RLock()
         self._scan_cache: dict[tuple[bool, bool], ScanResult] = {}
+        self._migrate_manual_date_json_to_sqlite()
 
     def invalidate_scan_cache(self) -> None:
         with self._scan_lock:
@@ -438,7 +442,78 @@ class PaperLibrary:
             return {}
         return payload if isinstance(payload, dict) else {}
 
-    def _record_from_index_item(self, item: dict[str, Any], active_prompt_slugs: list[str]) -> PaperRecord | None:
+    def _load_manual_date_json_payload(self) -> dict[str, Any]:
+        if not self.manual_date_path.exists():
+            return {}
+        try:
+            payload = json.loads(self.manual_date_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _load_manual_date_payload(self) -> dict[str, Any]:
+        payload = self._load_manual_date_json_payload()
+        if self.team_store is not None:
+            if payload:
+                try:
+                    self.team_store.migrate_manual_date_overrides(payload)
+                except Exception:
+                    pass
+            try:
+                db_payload = self.team_store.all_manual_date_overrides()
+            except Exception:
+                db_payload = {}
+            payload.update(db_payload)
+        return payload
+
+    def _migrate_manual_date_json_to_sqlite(self) -> None:
+        if self.team_store is None or not self.manual_date_path.exists():
+            return
+        payload = self._load_manual_date_json_payload()
+        if not payload:
+            return
+        try:
+            migrated = self.team_store.migrate_manual_date_overrides(payload)
+        except Exception:
+            return
+        if migrated:
+            self.invalidate_scan_cache()
+
+    def _write_manual_date_payload(self, payload: dict[str, Any]) -> None:
+        serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+        temp_path = self.manual_date_path.with_name(f"{self.manual_date_path.name}.tmp")
+        temp_path.write_text(serialized, encoding="utf-8", errors="backslashreplace")
+        temp_path.replace(self.manual_date_path)
+
+    def _manual_date_override_from_payload(
+        self,
+        payload: dict[str, Any] | None,
+        rel_path: str,
+    ) -> dict[str, str | None] | None:
+        if not payload:
+            return None
+        raw = payload.get(rel_path)
+        if not isinstance(raw, dict):
+            return None
+        display_date = str(raw.get("display_date") or "").strip()
+        sort_date = str(raw.get("sort_date") or "").strip()
+        precision = str(raw.get("precision") or "month").strip() or "month"
+        if not display_date or not sort_date:
+            return None
+        return {
+            "display_date": display_date,
+            "precision": precision,
+            "source": "manual",
+            "sort_date": sort_date,
+        }
+
+    def _record_from_index_item(
+        self,
+        item: dict[str, Any],
+        active_prompt_slugs: list[str],
+        *,
+        manual_date_overrides: dict[str, Any] | None = None,
+    ) -> PaperRecord | None:
         try:
             record = PaperRecord(**item)
         except TypeError:
@@ -447,6 +522,7 @@ class PaperLibrary:
         visible_slugs = set(active_prompt_slugs)
         stored_slugs = [slug for slug in record.prompt_result_slugs if isinstance(slug, str)]
         active_result_slugs = [slug for slug in stored_slugs if slug in visible_slugs]
+        manual_date = self._manual_date_override_from_payload(manual_date_overrides, record.rel_path)
         return PaperRecord(
             rel_path=record.rel_path,
             file_name=record.file_name,
@@ -455,10 +531,10 @@ class PaperLibrary:
             title=record.title,
             display_title=record.display_title,
             preview_text=record.preview_text,
-            extracted_date=record.extracted_date,
-            date_precision=record.date_precision,
-            date_source=record.date_source,
-            sort_date=record.sort_date,
+            extracted_date=(manual_date["display_date"] if manual_date is not None else record.extracted_date),
+            date_precision=(manual_date["precision"] if manual_date is not None else record.date_precision),
+            date_source=(manual_date["source"] if manual_date is not None else record.date_source),
+            sort_date=(manual_date["sort_date"] if manual_date is not None else record.sort_date),
             file_size=record.file_size,
             modified_at=record.modified_at,
             preview_kind=record.preview_kind,
@@ -490,11 +566,13 @@ class PaperLibrary:
 
     def load_active_index(self, active_prompt_slugs: list[str]) -> list[PaperRecord]:
         payload = self._load_active_index_payload()
+        with self._manual_date_lock:
+            manual_date_overrides = self._load_manual_date_payload()
         records: list[PaperRecord] = []
         for item in payload.get("records", []):
             if not isinstance(item, dict):
                 continue
-            record = self._record_from_index_item(item, active_prompt_slugs)
+            record = self._record_from_index_item(item, active_prompt_slugs, manual_date_overrides=manual_date_overrides)
             if record is None or record.is_done:
                 continue
             records.append(record)
@@ -502,8 +580,10 @@ class PaperLibrary:
 
     def rebuild_active_index(self, *, lightweight: bool = False) -> list[PaperRecord]:
         active_prompt_slugs = [prompt.slug for prompt in self.prompt_store.active_prompts()]
+        with self._manual_date_lock:
+            manual_date_overrides = self._load_manual_date_payload()
         records = [
-            self._build_record(path, active_prompt_slugs, lightweight=lightweight)
+            self._build_record(path, active_prompt_slugs, lightweight=lightweight, manual_date_overrides=manual_date_overrides)
             for path in self.iter_documents(include_done=False)
         ]
         self._write_active_index_payload(
@@ -518,11 +598,13 @@ class PaperLibrary:
 
     def _update_active_index_entry(self, rel_path: str, *, lightweight: bool = False) -> None:
         payload = self._load_active_index_payload()
+        with self._manual_date_lock:
+            manual_date_overrides = self._load_manual_date_payload()
         if not payload.get("records") and not self.cache_path.exists():
             active_prompt_slugs = [prompt.slug for prompt in self.prompt_store.active_prompts()]
             payload = {
                 "records": [
-                    asdict(self._build_record(path, active_prompt_slugs, lightweight=lightweight))
+                    asdict(self._build_record(path, active_prompt_slugs, lightweight=lightweight, manual_date_overrides=manual_date_overrides))
                     for path in self.iter_documents(include_done=False)
                 ]
             }
@@ -534,7 +616,7 @@ class PaperLibrary:
                 absolute = None
             if absolute is not None and absolute.exists() and absolute.is_file():
                 active_prompt_slugs = [prompt.slug for prompt in self.prompt_store.active_prompts()]
-                items.append(asdict(self._build_record(absolute, active_prompt_slugs, lightweight=lightweight)))
+                items.append(asdict(self._build_record(absolute, active_prompt_slugs, lightweight=lightweight, manual_date_overrides=manual_date_overrides)))
         self._write_active_index_payload(
             {
                 "updated_at": datetime.utcnow().isoformat(timespec="seconds"),
@@ -562,11 +644,13 @@ class PaperLibrary:
 
     def load_done_index(self, active_prompt_slugs: list[str]) -> list[PaperRecord]:
         payload = self._load_done_index_payload()
+        with self._manual_date_lock:
+            manual_date_overrides = self._load_manual_date_payload()
         records: list[PaperRecord] = []
         for item in payload.get("records", []):
             if not isinstance(item, dict):
                 continue
-            record = self._record_from_index_item(item, active_prompt_slugs)
+            record = self._record_from_index_item(item, active_prompt_slugs, manual_date_overrides=manual_date_overrides)
             if record is None:
                 continue
             if not self.is_done_rel_path(record.rel_path):
@@ -576,8 +660,10 @@ class PaperLibrary:
 
     def rebuild_done_index(self, *, lightweight: bool = True) -> list[PaperRecord]:
         active_prompt_slugs = [prompt.slug for prompt in self.prompt_store.active_prompts()]
+        with self._manual_date_lock:
+            manual_date_overrides = self._load_manual_date_payload()
         records = [
-            self._build_record(path, active_prompt_slugs, lightweight=lightweight)
+            self._build_record(path, active_prompt_slugs, lightweight=lightweight, manual_date_overrides=manual_date_overrides)
             for path in self.iter_done_documents()
         ]
         self._write_done_index_payload(
@@ -592,11 +678,13 @@ class PaperLibrary:
 
     def _update_done_index_entry(self, rel_path: str, *, lightweight: bool = False) -> None:
         payload = self._load_done_index_payload()
+        with self._manual_date_lock:
+            manual_date_overrides = self._load_manual_date_payload()
         if not payload.get("records") and not self.done_index_path.exists():
             active_prompt_slugs = [prompt.slug for prompt in self.prompt_store.active_prompts()]
             payload = {
                 "records": [
-                    asdict(self._build_record(path, active_prompt_slugs, lightweight=lightweight))
+                    asdict(self._build_record(path, active_prompt_slugs, lightweight=lightweight, manual_date_overrides=manual_date_overrides))
                     for path in self.iter_done_documents()
                 ]
             }
@@ -608,7 +696,7 @@ class PaperLibrary:
                 absolute = None
             if absolute is not None and absolute.exists() and absolute.is_file():
                 active_prompt_slugs = [prompt.slug for prompt in self.prompt_store.active_prompts()]
-                items.append(asdict(self._build_record(absolute, active_prompt_slugs, lightweight=lightweight)))
+                items.append(asdict(self._build_record(absolute, active_prompt_slugs, lightweight=lightweight, manual_date_overrides=manual_date_overrides)))
         self._write_done_index_payload(
             {
                 "updated_at": datetime.utcnow().isoformat(timespec="seconds"),
@@ -618,7 +706,14 @@ class PaperLibrary:
         )
         self.invalidate_scan_cache()
 
-    def _build_record(self, path: Path, active_prompt_slugs: list[str], *, lightweight: bool = False) -> PaperRecord:
+    def _build_record(
+        self,
+        path: Path,
+        active_prompt_slugs: list[str],
+        *,
+        lightweight: bool = False,
+        manual_date_overrides: dict[str, Any] | None = None,
+    ) -> PaperRecord:
         rel_path = path.relative_to(self.root).as_posix()
         folder = path.relative_to(self.root).parent.as_posix()
         if folder == ".":
@@ -635,6 +730,9 @@ class PaperLibrary:
         title = self._safe_text(meta.get("title") or path.stem)
         preview_text = self._safe_text(meta.get("preview_text") or "")
         date_info = self._extract_date(title, preview_text, path.name)
+        manual_date = self._manual_date_override_from_payload(manual_date_overrides, rel_path)
+        if manual_date is not None:
+            date_info = manual_date
         modified = datetime.fromtimestamp(path.stat().st_mtime)
         all_prompt_result_slugs = self.list_existing_prompt_slugs(rel_path)
         visible_prompt_result_slugs = [slug for slug in all_prompt_result_slugs if slug in set(active_prompt_slugs)]
@@ -665,7 +763,78 @@ class PaperLibrary:
         return value.encode("utf-8", "backslashreplace").decode("utf-8")
 
     def build_record_for_rel_path(self, rel_path: str, active_prompt_slugs: list[str]) -> PaperRecord:
-        return self._build_record(self.resolve_relative_path(rel_path), active_prompt_slugs)
+        with self._manual_date_lock:
+            manual_date_overrides = self._load_manual_date_payload()
+        return self._build_record(
+            self.resolve_relative_path(rel_path),
+            active_prompt_slugs,
+            manual_date_overrides=manual_date_overrides,
+        )
+
+    def set_manual_date(self, rel_path: str, precision: str, date_value: str, *, updated_by_user_id: int | None = None) -> None:
+        if self.team_store is None:
+            raise RuntimeError("Manual date storage requires team store.")
+        target = self.resolve_relative_path(rel_path)
+        if not target.exists() or not target.is_file():
+            raise FileNotFoundError(rel_path)
+        normalized_rel_path = target.relative_to(self.root).as_posix()
+        precision = precision.strip().lower()
+        date_value = date_value.strip()
+        try:
+            if precision == "year":
+                parsed = datetime.strptime(date_value, "%Y")
+                display_date = parsed.strftime("%Y")
+                sort_date = parsed.replace(month=1, day=1).date().isoformat()
+            elif precision == "month":
+                parsed = datetime.strptime(date_value, "%Y-%m")
+                display_date = parsed.strftime("%Y-%m")
+                sort_date = parsed.replace(day=1).date().isoformat()
+            elif precision == "day":
+                parsed = datetime.strptime(date_value, "%Y-%m-%d")
+                display_date = parsed.strftime("%Y-%m-%d")
+                sort_date = parsed.date().isoformat()
+            else:
+                raise ValueError
+        except ValueError as exc:
+            raise ValueError("请选择合法的论文日期。") from exc
+
+        active_prompt_slugs = [prompt.slug for prompt in self.prompt_store.active_prompts()]
+        record = self._build_record(target, active_prompt_slugs, manual_date_overrides={})
+        self.team_store.sync_papers([record])
+        self.team_store.set_manual_date_override(
+            normalized_rel_path,
+            display_date=display_date,
+            precision=precision,
+            sort_date=sort_date,
+            updated_by_user_id=updated_by_user_id,
+        )
+        self.invalidate_scan_cache()
+
+    def set_manual_month_date(self, rel_path: str, year_month: str) -> None:
+        self.set_manual_date(rel_path, "month", year_month)
+
+    def _move_manual_date(self, old_rel_path: str, new_rel_path: str) -> None:
+        if self.team_store is not None:
+            return
+        with self._manual_date_lock:
+            payload = self._load_manual_date_json_payload()
+            entry = payload.pop(old_rel_path, None)
+            if entry is None:
+                return
+            payload[new_rel_path] = entry
+            self._write_manual_date_payload(payload)
+        self.invalidate_scan_cache()
+
+    def _delete_manual_date(self, rel_path: str) -> None:
+        if self.team_store is not None:
+            return
+        with self._manual_date_lock:
+            payload = self._load_manual_date_json_payload()
+            if rel_path not in payload:
+                return
+            payload.pop(rel_path, None)
+            self._write_manual_date_payload(payload)
+        self.invalidate_scan_cache()
 
     def _prompt_state(self, rel_path: str, active_prompt_slugs: list[str]) -> list[dict[str, Any]]:
         entries: list[dict[str, Any]] = []
@@ -968,6 +1137,7 @@ class PaperLibrary:
         source.rename(destination)
         new_rel_path = destination.relative_to(self.root).as_posix()
         self._move_prompt_results(old_rel_path, new_rel_path)
+        self._move_manual_date(old_rel_path, new_rel_path)
         self._hash_cache.pop(old_rel_path, None)
         if self.is_done_rel_path(old_rel_path) or self.is_done_rel_path(new_rel_path):
             self._update_done_index_entry(old_rel_path)
@@ -984,6 +1154,7 @@ class PaperLibrary:
             raise FileNotFoundError(rel_path)
         target.unlink()
         self._hash_cache.pop(rel_path, None)
+        self._delete_manual_date(rel_path)
         self.clear_derived_artifacts(rel_path)
         if self.is_done_rel_path(rel_path):
             self._update_done_index_entry(rel_path)
@@ -1005,6 +1176,7 @@ class PaperLibrary:
         source.rename(destination)
         new_rel_path = destination.relative_to(self.root).as_posix()
         self._move_prompt_results(old_rel_path, new_rel_path)
+        self._move_manual_date(old_rel_path, new_rel_path)
         cached = self._hash_cache.pop(old_rel_path, None)
         if cached:
             self._hash_cache[new_rel_path] = cached
@@ -3687,6 +3859,36 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         except (FileNotFoundError, ValueError) as exc:
             flash(str(exc), "error")
             return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+
+    @app.post("/paper-date")
+    def paper_date_route() -> Any:
+        current_folder = request.form.get("folder", "")
+        query = request.form.get("q", "")
+        sort_by = request.form.get("sort", "date_desc")
+        show_done = parse_checkbox(request.form.get("show_done"))
+        rel_path = request.form.get("rel_path", "").strip("/")
+        tab = request.form.get("tab", "source")
+        precision = request.form.get("precision", "month").strip().lower()
+        date_value = request.form.get(f"date_{precision}", "").strip()
+        if not date_value:
+            date_value = request.form.get("date_value", "").strip() or request.form.get("year_month", "").strip()
+        actor = current_user()
+        if actor is None:
+            flash("请先登录。", "error")
+            return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+        try:
+            if not rel_path:
+                raise FileNotFoundError("")
+            if app.library.resolve_arxiv_id_for(rel_path) is not None:  # type: ignore[attr-defined]
+                raise ValueError("这篇论文已有 arXiv ID，暂不支持手动修改日期。")
+            app.library.set_manual_date(rel_path, precision, date_value, updated_by_user_id=actor.id)  # type: ignore[attr-defined]
+            ensure_paper_metadata(rel_path)
+            flash("论文日期已更新。", "success")
+        except FileNotFoundError:
+            flash("论文不存在。", "error")
+        except ValueError as exc:
+            flash(str(exc), "error")
+        return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
 
     @app.post("/prompt-run")
     def prompt_run_route() -> Any:
