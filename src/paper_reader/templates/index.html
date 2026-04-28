@@ -326,6 +326,7 @@
         </div>
       </section>
 
+
       <div class="viewer-inline-tags-panel" data-collapsible-body="tags-inline" hidden>
         {% if overflow_tags %}
           <div class="viewer-inline-tags-label">更多标签</div>
@@ -505,22 +506,35 @@
 
   <div class="pane-resizer pane-resizer-right" data-resizer="right" aria-hidden="true"></div>
 
-  <aside class="assistant-pane card layout-pane pane-right" data-pane="right">
+  <aside class="assistant-pane card layout-pane pane-right" data-pane="right" data-assistant-fullscreen="assistant-pane">
     <div class="pane-top pane-top-compact">
       <div>
         <p class="eyebrow">协作侧栏</p>
         <h2>协作记录 / 我爱学 / 一起学</h2>
       </div>
-      <button type="button" class="icon-button pane-toggle" data-pane-button="right" data-toggle-pane="right" title="折叠右栏" aria-label="折叠右栏">
-        <span class="icon-shell" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
-            <path d="M14.5 5v14"></path>
-            <path d="M9 8.5L12.5 12 9 15.5"></path>
-          </svg>
-        </span>
-        <span class="sr-only">切换右栏</span>
-      </button>
+      <div class="pane-top-actions">
+        {% if selected_paper %}
+          <button
+            type="button"
+            class="button-link secondary reader-fullscreen-button"
+            data-fullscreen-target="assistant-pane"
+            data-fullscreen-label="全屏交流"
+            data-fullscreen-exit-label="退出全屏"
+            title="全屏交流"
+            aria-label="全屏交流"
+          >全屏交流</button>
+        {% endif %}
+        <button type="button" class="icon-button pane-toggle" data-pane-button="right" data-toggle-pane="right" title="折叠右栏" aria-label="折叠右栏">
+          <span class="icon-shell" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3.5" y="5" width="17" height="14" rx="3"></rect>
+              <path d="M14.5 5v14"></path>
+              <path d="M9 8.5L12.5 12 9 15.5"></path>
+            </svg>
+          </span>
+          <span class="sr-only">切换右栏</span>
+        </button>
+      </div>
     </div>
 
     <div class="assistant-switch-row" role="tablist" aria-label="聊天区域切换">
@@ -635,21 +649,32 @@
           </div>
           <span data-chat-count="private">{{ selected_chat_context.private.count }} 条</span>
         </div>
-        <div class="team-chat-thread" data-chat-thread="private">
-          {% for message in selected_chat_context.private.messages %}
-            <article class="team-chat-message role-{{ message.role }} status-{{ message.status }}">
-              <header class="chat-message-head">
-                {{ render_avatar(message.avatar_url, message.avatar_label, 'avatar avatar-sm chat-avatar') }}
-                <div class="chat-message-copy">
-                  <strong>{{ message.display_name }}</strong>
-                  <small>{{ message.created_at }}</small>
-                </div>
-              </header>
-              <div class="team-chat-body markdown-render">{{ message.body_html|safe }}</div>
-            </article>
-          {% else %}
-            <p class="team-empty-copy">这里就是“我爱学”，适合记只想留给自己看的问题、复现思路和临时笔记。</p>
-          {% endfor %}
+        <div class="team-chat-layout" data-chat-layout="private">
+          <div class="team-chat-thread" data-chat-thread="private">
+            {% for message in selected_chat_context.private.messages %}
+              <article class="team-chat-message role-{{ message.role }} status-{{ message.status }}" data-message-id="{{ message.id }}">
+                <header class="chat-message-head">
+                  {{ render_avatar(message.avatar_url, message.avatar_label, 'avatar avatar-sm chat-avatar') }}
+                  <div class="chat-message-copy">
+                    <strong>{{ message.display_name }}</strong>
+                    <small>{{ message.created_at }}</small>
+                  </div>
+                </header>
+                <div class="team-chat-body markdown-render">{{ message.body_html|safe }}</div>
+              </article>
+            {% else %}
+              <p class="team-empty-copy">这里就是“我爱学”，适合记只想留给自己看的问题、复现思路和临时笔记。</p>
+            {% endfor %}
+          </div>
+          <aside class="team-chat-outline" data-chat-outline="private" aria-label="我爱学对话 outline">
+            <div class="team-chat-outline-head">
+              <strong>Outline</strong>
+              <span data-chat-outline-count="private">0 条</span>
+            </div>
+            <div class="team-chat-outline-list" data-chat-outline-list="private">
+              <p class="team-chat-outline-empty">右侧会列出可快速跳转的历史提问。</p>
+            </div>
+          </aside>
         </div>
         <form action="{{ url_for('chat_send_route') }}" method="post" class="team-inline-form" data-chat-form>
           <input type="hidden" name="folder" value="{{ current_folder }}">
@@ -672,21 +697,32 @@
           </div>
           <span data-chat-count="shared">{{ selected_chat_context.shared.count }} 条</span>
         </div>
-        <div class="team-chat-thread" data-chat-thread="shared">
-          {% for message in selected_chat_context.shared.messages %}
-            <article class="team-chat-message role-{{ message.role }} status-{{ message.status }}">
-              <header class="chat-message-head">
-                {{ render_avatar(message.avatar_url, message.avatar_label, 'avatar avatar-sm chat-avatar') }}
-                <div class="chat-message-copy">
-                  <strong>{{ message.display_name }}</strong>
-                  <small>{{ message.created_at }}</small>
-                </div>
-              </header>
-              <div class="team-chat-body markdown-render">{{ message.body_html|safe }}</div>
-            </article>
-          {% else %}
-            <p class="team-empty-copy">这里就是“一起学”，只要大家打开这篇论文，就能接着前面的话题继续往下聊。</p>
-          {% endfor %}
+        <div class="team-chat-layout" data-chat-layout="shared">
+          <div class="team-chat-thread" data-chat-thread="shared">
+            {% for message in selected_chat_context.shared.messages %}
+              <article class="team-chat-message role-{{ message.role }} status-{{ message.status }}" data-message-id="{{ message.id }}">
+                <header class="chat-message-head">
+                  {{ render_avatar(message.avatar_url, message.avatar_label, 'avatar avatar-sm chat-avatar') }}
+                  <div class="chat-message-copy">
+                    <strong>{{ message.display_name }}</strong>
+                    <small>{{ message.created_at }}</small>
+                  </div>
+                </header>
+                <div class="team-chat-body markdown-render">{{ message.body_html|safe }}</div>
+              </article>
+            {% else %}
+              <p class="team-empty-copy">这里就是“一起学”，只要大家打开这篇论文，就能接着前面的话题继续往下聊。</p>
+            {% endfor %}
+          </div>
+          <aside class="team-chat-outline" data-chat-outline="shared" aria-label="一起学对话 outline">
+            <div class="team-chat-outline-head">
+              <strong>Outline</strong>
+              <span data-chat-outline-count="shared">0 条</span>
+            </div>
+            <div class="team-chat-outline-list" data-chat-outline-list="shared">
+              <p class="team-chat-outline-empty">右侧会列出可快速跳转的历史提问。</p>
+            </div>
+          </aside>
         </div>
         <form action="{{ url_for('chat_send_route') }}" method="post" class="team-inline-form" data-chat-form>
           <input type="hidden" name="folder" value="{{ current_folder }}">
@@ -1277,6 +1313,14 @@
         shared: document.querySelector('[data-chat-count="shared"]'),
         private: document.querySelector('[data-chat-count="private"]'),
       };
+      const chatOutlineLists = {
+        shared: document.querySelector('[data-chat-outline-list="shared"]'),
+        private: document.querySelector('[data-chat-outline-list="private"]'),
+      };
+      const chatOutlineCountNodes = {
+        shared: document.querySelector('[data-chat-outline-count="shared"]'),
+        private: document.querySelector('[data-chat-outline-count="private"]'),
+      };
       const chatAutoScrollThreshold = 48;
       const initialData = JSON.parse(document.getElementById("initial-job-snapshot").textContent || "{\"jobs\":[]}");
       const initialActionData = JSON.parse(document.getElementById("initial-action-snapshot").textContent || "{\"actions\":[]}");
@@ -1298,7 +1342,7 @@
       const closeSettingsButton = settingsDrawer ? settingsDrawer.querySelector("[data-close-settings]") : null;
       const settingsResizeHandle = settingsDrawer ? settingsDrawer.querySelector("[data-settings-resize]") : null;
       const fullscreenButtons = Array.from(document.querySelectorAll("[data-fullscreen-target]"));
-      const fullscreenTargets = Array.from(document.querySelectorAll("[data-reader-fullscreen]"));
+      const fullscreenTargets = Array.from(document.querySelectorAll("[data-reader-fullscreen], [data-assistant-fullscreen]"));
       const shareButton = document.querySelector("[data-share-button]");
       const shareButtonLabel = shareButton ? shareButton.querySelector("[data-share-label]") : null;
       const shareToast = document.querySelector("[data-share-toast]");
@@ -1706,29 +1750,52 @@
         });
       }
 
+      function fullscreenTargetKey(target) {
+        if (!target) return "";
+        return target.dataset.readerFullscreen || target.dataset.assistantFullscreen || "";
+      }
+
+      function fullscreenModeClass(target) {
+        if (!target) return "";
+        return target.hasAttribute("data-assistant-fullscreen") ? "assistant-expanded" : "reader-expanded";
+      }
+
+      function findFullscreenTarget(key) {
+        if (!key) return null;
+        return document.querySelector(`[data-reader-fullscreen="${CSS.escape(key)}"], [data-assistant-fullscreen="${CSS.escape(key)}"]`);
+      }
+
       function setReaderExpanded(target, expanded) {
         fullscreenTargets.forEach((node) => {
           node.classList.toggle("is-reader-expanded", expanded && node === target);
         });
-        document.body.classList.toggle("reader-expanded", Boolean(expanded && target));
+        document.body.classList.remove("reader-expanded", "assistant-expanded");
+        if (expanded && target) {
+          document.body.classList.add(fullscreenModeClass(target));
+        }
         fullscreenButtons.forEach((button) => {
           const key = button.dataset.fullscreenTarget || "";
-          const pressed = Boolean(expanded && target && target.dataset.readerFullscreen === key);
-          button.textContent = pressed ? "退出放大" : "全屏阅读";
+          const pressed = Boolean(expanded && target && fullscreenTargetKey(target) === key);
+          const enterLabel = button.dataset.fullscreenLabel || "全屏阅读";
+          const exitLabel = button.dataset.fullscreenExitLabel || "退出放大";
+          const label = pressed ? exitLabel : enterLabel;
+          button.textContent = label;
           button.setAttribute("aria-pressed", pressed ? "true" : "false");
+          button.setAttribute("title", label);
+          button.setAttribute("aria-label", label);
         });
       }
 
       fullscreenButtons.forEach((button) => {
         button.addEventListener("click", () => {
           const key = button.dataset.fullscreenTarget || "";
-          const target = document.querySelector(`[data-reader-fullscreen="${CSS.escape(key)}"]`);
+          const target = findFullscreenTarget(key);
           if (!target) return;
           setReaderExpanded(target, !target.classList.contains("is-reader-expanded"));
         });
       });
       document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && document.body.classList.contains("reader-expanded")) {
+        if (event.key === "Escape" && (document.body.classList.contains("reader-expanded") || document.body.classList.contains("assistant-expanded"))) {
           setReaderExpanded(null, false);
           return;
         }
@@ -2160,6 +2227,12 @@
           buttonAttribute: "chatSwitch",
           panelAttribute: "chatPanel",
         });
+        if (activeChatPanel === "private" || activeChatPanel === "shared") {
+          window.requestAnimationFrame(() => {
+            renderChatOutline(activeChatPanel);
+            syncActiveChatOutline(activeChatPanel);
+          });
+        }
       }
 
       function initializeChatPanelSwitch() {
@@ -2201,7 +2274,7 @@
           ? `<span class="avatar avatar-sm chat-avatar"><img class="avatar-image" src="${escapeHtml(message.avatar_url)}" alt=""></span>`
           : `<span class="avatar avatar-sm chat-avatar"><span class="avatar-fallback">${escapeHtml(message.avatar_label || '?')}</span></span>`;
         return `
-          <article class="team-chat-message role-${escapeHtml(message.role)} status-${escapeHtml(message.status)}">
+          <article class="team-chat-message role-${escapeHtml(message.role)} status-${escapeHtml(message.status)}" data-message-id="${escapeHtml(message.id ?? "")}">
             <header class="chat-message-head">
               ${avatarHtml}
               <div class="chat-message-copy">
@@ -2216,17 +2289,165 @@
 
       function queueMathTypeset(element) {
         if (!element || !window.MathJax || typeof window.MathJax.typesetPromise !== "function") {
-          return;
+          return Promise.resolve();
         }
         if (typeof window.MathJax.typesetClear === "function") {
           window.MathJax.typesetClear([element]);
         }
-        window.MathJax.typesetPromise([element]).catch(() => {});
+        return window.MathJax.typesetPromise([element]).catch(() => {});
+      }
+
+      function chatMessageSignature(message) {
+        if (!message) return "";
+        const body = typeof message.body_html === "string" && message.body_html
+          ? message.body_html
+          : String(message.body || "");
+        return [
+          Number.isFinite(Number(message.id)) ? Number(message.id) : "",
+          message.role || "",
+          message.status || "",
+          message.created_at || "",
+          body.trim(),
+        ].join("::");
+      }
+
+      function readChatThreadState(visibility) {
+        const container = chatThreads[visibility];
+        const countNode = chatCountNodes[visibility];
+        const articles = container ? Array.from(container.querySelectorAll(".team-chat-message")) : [];
+        const lastArticle = articles[articles.length - 1];
+        const lastMessageId = Number(lastArticle && lastArticle.dataset.messageId);
+        const signature = articles.map((article) => {
+          const body = article.querySelector(".team-chat-body");
+          const time = article.querySelector(".chat-message-copy small");
+          return [
+            article.dataset.messageId || "",
+            article.className || "",
+            (time && time.textContent ? time.textContent : "").trim(),
+            body ? body.innerHTML.trim() : "",
+          ].join("::");
+        }).join("|");
+        return {
+          count: parseCountText(countNode),
+          lastMessageId: Number.isFinite(lastMessageId) ? lastMessageId : null,
+          signature,
+        };
+      }
+
+      function outlineSourceMessages(container) {
+        const messages = container ? Array.from(container.querySelectorAll(".team-chat-message")) : [];
+        if (!messages.length) return [];
+        const userMessages = messages.filter((message) => message.classList.contains("role-user"));
+        return userMessages.length ? userMessages : messages;
+      }
+
+      function messageAnchorId(visibility, node, index) {
+        if (!node) return "";
+        const rawId = String(node.dataset.messageId || index + 1);
+        const safeId = rawId.replace(/[^a-zA-Z0-9_-]+/g, "-");
+        const anchorId = `chat-${visibility}-${safeId}`;
+        node.id = anchorId;
+        return anchorId;
+      }
+
+      function outlineSnippet(text, fallback) {
+        const normalized = String(text || "").replace(/\s+/g, " ").trim();
+        return normalized || fallback;
+      }
+
+      function outlineAvatarHtml(message, fallbackLabel = "?") {
+        const avatarNode = message ? message.querySelector(".chat-avatar") : null;
+        if (avatarNode) {
+          return avatarNode.outerHTML.replace("chat-avatar", "chat-avatar team-chat-outline-avatar");
+        }
+        return `<span class="avatar avatar-sm chat-avatar team-chat-outline-avatar"><span class="avatar-fallback">${escapeHtml(fallbackLabel)}</span></span>`;
+      }
+
+      function setActiveChatOutline(visibility, messageId) {
+        const list = chatOutlineLists[visibility];
+        if (!list) return;
+        const normalizedId = String(messageId || "");
+        list.querySelectorAll(".team-chat-outline-item").forEach((item) => {
+          const active = (item.dataset.outlineMessageId || "") === normalizedId;
+          item.classList.toggle("is-active", active);
+        });
+        const activeItem = list.querySelector(".team-chat-outline-item.is-active");
+        if (activeItem) {
+          activeItem.scrollIntoView({ block: "nearest" });
+        }
+      }
+
+      function syncActiveChatOutline(visibility) {
+        const container = chatThreads[visibility];
+        const messages = outlineSourceMessages(container);
+        if (!container || !messages.length) {
+          setActiveChatOutline(visibility, "");
+          return;
+        }
+        const marker = container.scrollTop + 24;
+        let activeMessage = messages[0];
+        messages.forEach((message) => {
+          const top = message.offsetTop - container.offsetTop;
+          if (top <= marker) {
+            activeMessage = message;
+          }
+        });
+        setActiveChatOutline(visibility, activeMessage.dataset.messageId || activeMessage.id || "");
+      }
+
+      function renderChatOutline(visibility) {
+        const container = chatThreads[visibility];
+        const list = chatOutlineLists[visibility];
+        const countNode = chatOutlineCountNodes[visibility];
+        if (!container || !list) return;
+        const messages = outlineSourceMessages(container);
+        if (countNode) {
+          countNode.textContent = `${messages.length} 条`;
+        }
+        if (!messages.length) {
+          list.innerHTML = '<p class="team-chat-outline-empty">还没有可快速跳转的历史条目。</p>';
+          return;
+        }
+        list.innerHTML = messages.map((message, index) => {
+          const anchorId = messageAnchorId(visibility, message, index);
+          const speaker = (message.querySelector(".chat-message-copy strong")?.textContent || `对话 ${index + 1}`).trim();
+          const createdAt = (message.querySelector(".chat-message-copy small")?.textContent || `第 ${index + 1} 条`).trim();
+          const bodyText = message.querySelector(".team-chat-body")?.textContent || "";
+          const avatarHtml = outlineAvatarHtml(message, speaker.slice(0, 1) || "?");
+          return `
+            <button
+              type="button"
+              class="team-chat-outline-item"
+              data-outline-target="${escapeHtml(anchorId)}"
+              data-outline-message-id="${escapeHtml(message.dataset.messageId || String(index + 1))}"
+            >
+              <div class="team-chat-outline-primary">
+                ${avatarHtml}
+                <strong class="team-chat-outline-name">${escapeHtml(speaker)}</strong>
+                <small class="team-chat-outline-time">${escapeHtml(createdAt)}</small>
+              </div>
+              <div class="team-chat-outline-secondary">${escapeHtml(outlineSnippet(bodyText, `对话 ${index + 1}`))}</div>
+            </button>
+          `;
+        }).join("");
+        list.querySelectorAll(".team-chat-outline-item").forEach((button) => {
+          button.addEventListener("click", () => {
+            const targetId = button.dataset.outlineTarget || "";
+            const target = targetId ? document.getElementById(targetId) : null;
+            if (!target) return;
+            const top = Math.max(target.offsetTop - container.offsetTop - 6, 0);
+            container.scrollTo({ top, behavior: "smooth" });
+            setActiveChatOutline(visibility, button.dataset.outlineMessageId || "");
+            target.classList.add("is-jump-target");
+            window.setTimeout(() => target.classList.remove("is-jump-target"), 1200);
+          });
+        });
+        syncActiveChatOutline(visibility);
       }
 
       const chatThreadState = {
-        shared: { count: parseCountText(chatCountNodes.shared), lastMessageId: null },
-        private: { count: parseCountText(chatCountNodes.private), lastMessageId: null },
+        shared: readChatThreadState("shared"),
+        private: readChatThreadState("private"),
       };
 
       function isChatThreadNearBottom(container) {
@@ -2241,37 +2462,69 @@
         return Number.isFinite(id) ? id : null;
       }
 
-      function renderChatThread(visibility, thread) {
+      function chatThreadSignature(messages) {
+        if (!Array.isArray(messages) || !messages.length) return "";
+        return messages.map(chatMessageSignature).join("|");
+      }
+
+      function setChatThreadScroll(container, behavior, preservedTop = 0) {
+        if (!container) return;
+        const apply = () => {
+          if (behavior === "bottom") {
+            container.scrollTop = container.scrollHeight;
+            return;
+          }
+          container.scrollTop = preservedTop;
+        };
+        apply();
+        window.requestAnimationFrame(apply);
+      }
+
+      function renderChatThread(visibility, thread, { forceScroll = false } = {}) {
         const container = chatThreads[visibility];
         const countNode = chatCountNodes[visibility];
         if (!container || !thread) return;
         const messages = Array.isArray(thread.messages) ? thread.messages : [];
         const nextCount = Number(thread.count || messages.length);
-        const previousState = chatThreadState[visibility] || { count: 0, lastMessageId: null };
+        const previousState = chatThreadState[visibility] || { count: 0, lastMessageId: null, signature: "" };
         const previousCount = Number(previousState.count || 0);
+        const previousScrollTop = container.scrollTop;
         const wasNearBottom = isChatThreadNearBottom(container);
         const nextLastMessageId = lastChatMessageId(messages);
+        const nextSignature = chatThreadSignature(messages);
+        const hasContentChange = nextSignature !== (previousState.signature || "");
         const hasNewMessages = nextCount > previousCount || (
           nextLastMessageId !== null
           && previousState.lastMessageId !== null
           && nextLastMessageId > previousState.lastMessageId
         );
+        const shouldAutoScroll = forceScroll || (wasNearBottom && (hasNewMessages || hasContentChange));
         if (countNode) {
           countNode.textContent = `${nextCount} 条`;
+        }
+        if (!hasContentChange && nextCount === previousCount) {
+          chatThreadState[visibility] = { count: nextCount, lastMessageId: nextLastMessageId, signature: nextSignature };
+          return;
         }
         if (!messages.length) {
           container.innerHTML = visibility === "shared"
             ? '<p class="team-empty-copy">这里就是“一起学”，只要大家打开这篇论文，就能接着前面的话题继续往下聊。</p>'
             : '<p class="team-empty-copy">这里就是“我爱学”，适合记只想留给自己看的问题、复现思路和临时笔记。</p>';
-          chatThreadState[visibility] = { count: nextCount, lastMessageId: nextLastMessageId };
+          renderChatOutline(visibility);
+          chatThreadState[visibility] = { count: nextCount, lastMessageId: nextLastMessageId, signature: nextSignature };
           return;
         }
         container.innerHTML = messages.map(renderChatMessage).join("");
-        queueMathTypeset(container);
-        if (wasNearBottom && hasNewMessages) {
-          container.scrollTop = container.scrollHeight;
+        renderChatOutline(visibility);
+        const mathPromise = queueMathTypeset(container);
+        if (shouldAutoScroll) {
+          setChatThreadScroll(container, "bottom");
+          mathPromise.finally(() => setChatThreadScroll(container, "bottom"));
+        } else {
+          setChatThreadScroll(container, "preserve", previousScrollTop);
+          mathPromise.finally(() => setChatThreadScroll(container, "preserve", previousScrollTop));
         }
-        chatThreadState[visibility] = { count: nextCount, lastMessageId: nextLastMessageId };
+        chatThreadState[visibility] = { count: nextCount, lastMessageId: nextLastMessageId, signature: nextSignature };
       }
 
       function hasPendingChatMessages(context) {
@@ -2282,10 +2535,21 @@
         });
       }
 
-      function renderChatContext(context) {
+      function renderChatContext(context, options = {}) {
         if (!context) return;
-        renderChatThread("shared", context.shared);
-        renderChatThread("private", context.private);
+        renderChatThread("shared", context.shared, { forceScroll: options.forceScroll === true && options.visibility === "shared" });
+        renderChatThread("private", context.private, { forceScroll: options.forceScroll === true && options.visibility === "private" });
+      }
+
+      function initializeChatOutlines() {
+        ["shared", "private"].forEach((visibility) => {
+          const container = chatThreads[visibility];
+          if (!container) return;
+          renderChatOutline(visibility);
+          container.addEventListener("scroll", () => {
+            syncActiveChatOutline(visibility);
+          }, { passive: true });
+        });
       }
 
       let chatRefreshTimer = null;
@@ -2339,7 +2603,9 @@
             textarea.value = "";
             textarea.focus();
           }
-          renderChatContext(payload.context || null);
+          const visibilityInput = form.querySelector('input[name="visibility"]');
+          const visibility = visibilityInput ? visibilityInput.value : null;
+          renderChatContext(payload.context || null, { forceScroll: true, visibility });
           scheduleChatRefresh(900);
         } finally {
           if (submitButton) submitButton.disabled = false;
@@ -2677,6 +2943,7 @@
       initializeCollapsibleCards();
       initializeChatPanelSwitch();
       initializeSidebarPanelSwitch();
+      initializeChatOutlines();
 
       if (dashboard) {
         renderJobs(initialData);
