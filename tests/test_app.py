@@ -140,14 +140,23 @@ class PaperReaderAppTests(unittest.TestCase):
 
     def fake_binary_response(self, payload: bytes):
         class FakeResponse:
+            def __init__(self):
+                self.offset = 0
+
             def __enter__(self):
                 return self
 
             def __exit__(self, exc_type, exc, tb):
                 return False
 
-            def read(self):
-                return payload
+            def read(self, size: int = -1):
+                if size is None or size < 0:
+                    chunk = payload[self.offset :]
+                    self.offset = len(payload)
+                    return chunk
+                chunk = payload[self.offset : self.offset + size]
+                self.offset += len(chunk)
+                return chunk
 
         return FakeResponse()
 
@@ -768,6 +777,58 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertEqual(latest_sources[0]["source_value"], "2601.07155")
         self.assertEqual(latest_sources[0]["source_url"], "https://arxiv.org/abs/2601.07155v2")
         self.assertEqual(mocked_submit.call_args.kwargs["force"], True)
+
+    def test_remote_import_retries_slow_pdf_downloads(self) -> None:
+        remote_pdf = self.library / "remote.pdf"
+        self.make_pdf(remote_pdf, "Retry Remote Import")
+        remote_bytes = remote_pdf.read_bytes()
+        remote_pdf.unlink()
+        admin_user = self.app.team_store.get_user_by_username("admin")
+        assert admin_user is not None
+        action = paper_reader_app_module.ActionRecord(
+            id="retry001",
+            kind="remote-import",
+            title="远程导入：2604.02268",
+            source="remote-import",
+            requested_by_user_id=admin_user.id,
+            requested_by_display_name=admin_user.display_name,
+            status="running",
+            progress=1,
+            message="任务开始执行。",
+            error=None,
+            result={},
+            payload={"raw_targets": "2604.02268", "recommendation_reason": ""},
+            created_at="2026-04-29T00:00:00",
+            updated_at="2026-04-29T00:00:00",
+            started_at="2026-04-29T00:00:00",
+            finished_at=None,
+        )
+        handler = self.app.action_queue._handlers["remote-import"]
+        calls = {"count": 0}
+
+        def flaky_urlopen(request_obj, timeout=30):
+            calls["count"] += 1
+            if calls["count"] == 1:
+                raise TimeoutError("The read operation timed out")
+            self.assertEqual(timeout, paper_reader_app_module.REMOTE_PDF_DOWNLOAD_TIMEOUT)
+            return self.fake_binary_response(remote_bytes)
+
+        with patch.object(paper_reader_app_module, "urlopen", side_effect=flaky_urlopen):
+            with patch.object(paper_reader_app_module.time, "sleep") as mocked_sleep:
+                with patch.object(
+                    self.app.job_queue,
+                    "submit",
+                    return_value={"queued": 1, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []},
+                ):
+                    result = handler(action, lambda progress, message, payload=None: None, lambda: False)
+
+        self.assertEqual(calls["count"], 2)
+        mocked_sleep.assert_called_once()
+        self.assertEqual(result["summary"]["saved"], 1)
+        saved_path = self.library / "Imports" / "arXiv" / "2604.02268.pdf"
+        self.assertTrue(saved_path.exists())
+        self.assertEqual(saved_path.read_bytes(), remote_bytes)
+        self.assertEqual(saved_path.stat().st_mode & 0o444, 0o444)
 
     def test_profile_avatar_upload_updates_current_user_and_serves_file(self) -> None:
         response = self.client.post(

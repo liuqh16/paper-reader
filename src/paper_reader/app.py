@@ -66,6 +66,9 @@ DEFAULT_LOGIN_PASSWORD = "paperpaperreaderreader12678"
 DEFAULT_SECRET_KEY = "paper-reader-dev-secret"
 MAX_LOGIN_FAILURES = 3
 LOGIN_LOCK_SECONDS = 5 * 60
+REMOTE_PDF_DOWNLOAD_TIMEOUT = 180
+REMOTE_PDF_DOWNLOAD_ATTEMPTS = 3
+REMOTE_PDF_DOWNLOAD_CHUNK_SIZE = 128 * 1024
 DEFAULT_STORAGE_ROOT = Path("/vePFS-Mindverse/share/paper-reader")
 DEFAULT_LIBRARY_ROOT = DEFAULT_STORAGE_ROOT / "library"
 DEFAULT_SOURCE_ARCHIVE_ROOT = DEFAULT_STORAGE_ROOT / "sources" / "huggingface_daily"
@@ -963,6 +966,10 @@ class PaperLibrary:
             counter += 1
         return candidate
 
+    @staticmethod
+    def _ensure_readable_file(path: Path) -> None:
+        path.chmod(path.stat().st_mode | 0o644)
+
     def import_external_file(self, source_path: Path, target_folder: str, *, preferred_name: str | None = None) -> dict[str, Any]:
         if not source_path.exists() or not source_path.is_file():
             raise FileNotFoundError(str(source_path))
@@ -985,6 +992,7 @@ class PaperLibrary:
 
         destination = self.make_unique_destination(target_folder, source_name)
         shutil.copy2(source_path, destination)
+        self._ensure_readable_file(destination)
         rel_path = destination.relative_to(self.root).as_posix()
         if self.is_done_rel_path(rel_path):
             self._update_done_index_entry(rel_path)
@@ -1037,6 +1045,7 @@ class PaperLibrary:
             }
 
         shutil.copy2(source_path, target)
+        self._ensure_readable_file(target)
         self._hash_cache.pop(rel_path, None)
         if clear_derived:
             self.clear_derived_artifacts(rel_path)
@@ -2793,10 +2802,38 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         raise ValueError("暂时只支持 arXiv ID / arXiv 链接 / OpenReview PDF 链接 / 直接 PDF 链接。")
 
     def download_remote_pdf(download_url: str) -> Path:
-        request_obj = Request(download_url, headers={"User-Agent": "paper-reader/1.0"})
-        with urlopen(request_obj, timeout=60) as response, tempfile.NamedTemporaryFile(prefix="paper-reader-import-", suffix=".pdf", delete=False) as handle:
-            handle.write(response.read())
-            return Path(handle.name)
+        last_error: Exception | None = None
+        for attempt in range(1, REMOTE_PDF_DOWNLOAD_ATTEMPTS + 1):
+            temp_path: Path | None = None
+            try:
+                request_obj = Request(
+                    download_url,
+                    headers={
+                        "User-Agent": "paper-reader/1.0",
+                        "Accept": "application/pdf,*/*",
+                    },
+                )
+                with urlopen(request_obj, timeout=REMOTE_PDF_DOWNLOAD_TIMEOUT) as response, tempfile.NamedTemporaryFile(
+                    prefix="paper-reader-import-",
+                    suffix=".pdf",
+                    delete=False,
+                ) as handle:
+                    temp_path = Path(handle.name)
+                    while True:
+                        chunk = response.read(REMOTE_PDF_DOWNLOAD_CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        handle.write(chunk)
+                    return temp_path
+            except Exception as exc:
+                last_error = exc
+                if temp_path is not None:
+                    temp_path.unlink(missing_ok=True)
+                if attempt >= REMOTE_PDF_DOWNLOAD_ATTEMPTS:
+                    raise RuntimeError(f"{exc}（已重试 {REMOTE_PDF_DOWNLOAD_ATTEMPTS} 次）") from exc
+                time.sleep(min(2 * attempt, 6))
+
+        raise RuntimeError(str(last_error) if last_error else "下载失败。")
 
     def submit_remote_import_jobs(rel_paths: list[str], actor: TeamUser, *, source: str) -> dict[str, Any]:
         return submit_remote_import_jobs_with_force(rel_paths, actor, source=source, force=False)
