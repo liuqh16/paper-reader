@@ -724,6 +724,14 @@
               <p class="team-empty-copy">这里就是“我爱学”，适合记只想留给自己看的问题、复现思路和临时笔记。</p>
             {% endfor %}
           </div>
+          <div
+            class="team-chat-outline-resizer"
+            data-chat-outline-resizer="private"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整我爱学聊天区和 Outline 宽度"
+            tabindex="0"
+          ></div>
           <aside class="team-chat-outline" data-chat-outline="private" aria-label="我爱学对话 outline">
             <div class="team-chat-outline-head">
               <strong>Outline</strong>
@@ -772,6 +780,14 @@
               <p class="team-empty-copy">这里就是“一起学”，只要大家打开这篇论文，就能接着前面的话题继续往下聊。</p>
             {% endfor %}
           </div>
+          <div
+            class="team-chat-outline-resizer"
+            data-chat-outline-resizer="shared"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整一起学聊天区和 Outline 宽度"
+            tabindex="0"
+          ></div>
           <aside class="team-chat-outline" data-chat-outline="shared" aria-label="一起学对话 outline">
             <div class="team-chat-outline-head">
               <strong>Outline</strong>
@@ -1361,6 +1377,8 @@
       const chatForms = Array.from(document.querySelectorAll("[data-chat-form]"));
       const chatSwitchButtons = Array.from(document.querySelectorAll("[data-chat-switch]"));
       const chatPanels = Array.from(document.querySelectorAll("[data-chat-panel]"));
+      const chatLayouts = Array.from(document.querySelectorAll("[data-chat-layout]"));
+      const chatOutlineResizers = Array.from(document.querySelectorAll("[data-chat-outline-resizer]"));
       const sidebarSwitchButtons = Array.from(document.querySelectorAll("[data-sidebar-switch]"));
       const sidebarPanels = Array.from(document.querySelectorAll("[data-sidebar-panel]"));
       const chatThreads = {
@@ -1438,6 +1456,7 @@
         orbY: null,
         orbMoved: false,
         settingsWidth: 560,
+        chatOutlineWidth: 260,
       };
       let layoutState = loadLayoutState();
       let collapsibleState = loadCollapsibleState();
@@ -1726,6 +1745,42 @@
         settingsOrb.classList.add("is-custom-position");
       }
 
+      function activeChatLayoutWidth() {
+        const activePanel = chatPanels.find((panel) => !panel.hidden);
+        const activeLayout = activePanel ? activePanel.querySelector("[data-chat-layout]") : null;
+        const fallbackLayout = chatLayouts.find((layout) => layout.getBoundingClientRect().width > 0);
+        const rect = (activeLayout || fallbackLayout || layoutRoot)?.getBoundingClientRect();
+        return rect?.width || window.innerWidth;
+      }
+
+      function chatOutlineWidthBounds() {
+        const layoutWidth = activeChatLayoutWidth();
+        return {
+          min: 220,
+          max: Math.max(260, Math.min(520, Math.floor(layoutWidth * 0.52))),
+        };
+      }
+
+      function currentChatOutlineWidth() {
+        const width = Number(layoutState.chatOutlineWidth);
+        const preferredWidth = Number.isFinite(width) ? width : defaultLayoutState.chatOutlineWidth;
+        const { min, max } = chatOutlineWidthBounds();
+        return clamp(preferredWidth, min, max);
+      }
+
+      function applyChatOutlineWidth() {
+        const width = currentChatOutlineWidth();
+        const { min, max } = chatOutlineWidthBounds();
+        chatLayouts.forEach((layout) => {
+          layout.style.setProperty("--chat-outline-width", `${width}px`);
+        });
+        chatOutlineResizers.forEach((handle) => {
+          handle.setAttribute("aria-valuemin", String(min));
+          handle.setAttribute("aria-valuemax", String(max));
+          handle.setAttribute("aria-valuenow", String(width));
+        });
+      }
+
       function applyLayoutState() {
         if (!layoutRoot) return;
         layoutRoot.style.setProperty("--left-pane-width", layoutState.leftCollapsed ? "0px" : `${layoutState.leftWidth}px`);
@@ -1747,6 +1802,7 @@
           settingsDrawer.toggleAttribute("inert", !layoutState.settingsOpen);
           settingsDrawer.setAttribute("aria-hidden", layoutState.settingsOpen ? "false" : "true");
         }
+        applyChatOutlineWidth();
         syncPaneRegions();
         syncPaneButtons();
         applyOrbPosition();
@@ -1913,6 +1969,7 @@
         if (expanded && target) {
           document.body.classList.add(fullscreenModeClass(target));
         }
+        window.requestAnimationFrame(applyChatOutlineWidth);
         fullscreenButtons.forEach((button) => {
           const key = button.dataset.fullscreenTarget || "";
           const pressed = Boolean(expanded && target && fullscreenTargetKey(target) === key);
@@ -1951,6 +2008,7 @@
         setSettingsOpen(false);
       });
       window.addEventListener("resize", () => {
+        applyChatOutlineWidth();
         if (!settingsOrb || !layoutState.orbMoved) return;
         applyLayoutState();
         persistLayoutState();
@@ -1990,7 +2048,63 @@
         });
       }
 
+      function bindChatOutlineResizer(handle) {
+        if (!handle) return;
+        handle.addEventListener("pointerdown", (event) => {
+          if (event.button !== 0) return;
+          if (!document.body.classList.contains("assistant-expanded")) return;
+          event.preventDefault();
+          const startX = event.clientX;
+          const startWidth = currentChatOutlineWidth();
+          const { min, max } = chatOutlineWidthBounds();
+          handle.setPointerCapture(event.pointerId);
+          document.body.classList.add("is-resizing-chat-outline");
+
+          function onMove(moveEvent) {
+            layoutState.chatOutlineWidth = clamp(startWidth - (moveEvent.clientX - startX), min, max);
+            applyChatOutlineWidth();
+          }
+
+          function onUp() {
+            if (handle.hasPointerCapture(event.pointerId)) {
+              handle.releasePointerCapture(event.pointerId);
+            }
+            document.body.classList.remove("is-resizing-chat-outline");
+            window.removeEventListener("pointermove", onMove);
+            window.removeEventListener("pointerup", onUp);
+            window.removeEventListener("pointercancel", onUp);
+            persistLayoutState();
+          }
+
+          window.addEventListener("pointermove", onMove);
+          window.addEventListener("pointerup", onUp, { once: true });
+          window.addEventListener("pointercancel", onUp, { once: true });
+        });
+
+        handle.addEventListener("keydown", (event) => {
+          const { min, max } = chatOutlineWidthBounds();
+          const step = event.shiftKey ? 32 : 16;
+          let nextWidth = currentChatOutlineWidth();
+          if (event.key === "ArrowLeft") {
+            nextWidth += step;
+          } else if (event.key === "ArrowRight") {
+            nextWidth -= step;
+          } else if (event.key === "Home") {
+            nextWidth = min;
+          } else if (event.key === "End") {
+            nextWidth = max;
+          } else {
+            return;
+          }
+          event.preventDefault();
+          layoutState.chatOutlineWidth = clamp(nextWidth, min, max);
+          applyChatOutlineWidth();
+          persistLayoutState();
+        });
+      }
+
       paneResizers.forEach(bindPaneResizer);
+      chatOutlineResizers.forEach(bindChatOutlineResizer);
       applyLayoutState();
       if (shareButton) {
         shareButton.addEventListener("click", () => {
