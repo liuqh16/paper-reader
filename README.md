@@ -13,7 +13,7 @@
 - 个人已读流程：每个用户都可以把论文标记为“已读”，只影响自己的列表视图
 - Sources 页面：浏览外部抓取的论文归档，支持按天打包下载或一键导入主阅读器
 - Insights 页面：基于已有“核心解读”生成历史脉络，并用时间线方式可视化
-- 登录保护：进入阅读器前需要用户名和密码
+- 登录保护：支持本地用户名密码，也支持可选的飞书 OAuth 登录
 
 ## 默认配置
 
@@ -65,6 +65,44 @@ PAPER_READER_LOGIN_PASSWORD=replace-with-your-own-password
 - `.env` 已被 `.gitignore` 忽略，不会默认提交到 Git
 - 建议在部署后立即用你自己的密码覆盖默认密码
 - 不要把你自己的真实密码写进 README 或提交到 GitHub
+
+### 启用飞书登录
+
+如果你希望在登录页显示“使用飞书登录”，需要在项目根目录的 `.env` 里增加下面几项：
+
+- `PAPER_READER_SECRET_KEY`
+- `PAPER_READER_BASE_URL`
+- `PAPER_READER_FEISHU_APP_ID`
+- `PAPER_READER_FEISHU_APP_SECRET`
+
+示例：
+
+```dotenv
+PAPER_READER_SECRET_KEY=replace-with-a-random-secret
+PAPER_READER_BASE_URL=https://paper-reader.example.com
+PAPER_READER_FEISHU_APP_ID=cli_xxx
+PAPER_READER_FEISHU_APP_SECRET=xxx
+```
+
+回调地址固定为：
+
+```text
+https://<你的域名>/auth/feishu/callback
+```
+
+例如：
+
+```text
+https://paper-reader.example.com/auth/feishu/callback
+```
+
+飞书侧的配置路径是：应用详情页 -> 安全设置 -> 重定向 URL。把上面的完整回调地址加进去。
+
+实现细节：
+
+- 本地用户名密码登录仍然保留
+- 首次通过飞书登录会自动创建一个本地 `member` 账号
+- 如果需要管理员权限，先用本地管理员账号登录，再到团队设置里调整角色
 
 ## 环境准备
 

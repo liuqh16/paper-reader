@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
 import os
+import queue
 import re
 import shutil
 import string
@@ -11,7 +12,8 @@ import tempfile
 import threading
 import time
 import uuid
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qs, unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
 import zipfile
 from dataclasses import asdict, dataclass, replace
@@ -19,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from flask import Flask, abort, flash, redirect, render_template, request, send_file, send_from_directory, session, url_for
+from flask import Flask, Response, abort, flash, redirect, render_template, request, send_file, send_from_directory, session, stream_with_context, url_for
 from markupsafe import Markup
 from werkzeug.utils import secure_filename
 
@@ -36,6 +38,7 @@ from .arxiv_markdown import (
     normalize_arxiv_id,
     write_markdown_cache,
 )
+from .chat_ai import answer_question_about_document
 from .chat_queue import PaperChatQueue
 from .document_utils import ALLOWED_EXTENSIONS, extract_document_metadata
 from .insights_history import HistoricalInsightsStore, extract_digest
@@ -60,11 +63,30 @@ ALLOWED_AVATAR_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 DEFAULT_BATCH_PANEL_PAGE_SIZE = 50
 DEFAULT_LOGIN_USERNAME = "admin"
 DEFAULT_LOGIN_PASSWORD = "paperpaperreaderreader12678"
+DEFAULT_SECRET_KEY = "paper-reader-dev-secret"
 MAX_LOGIN_FAILURES = 3
 LOGIN_LOCK_SECONDS = 5 * 60
 DEFAULT_STORAGE_ROOT = Path("/vePFS-Mindverse/share/paper-reader")
 DEFAULT_LIBRARY_ROOT = DEFAULT_STORAGE_ROOT / "library"
 DEFAULT_SOURCE_ARCHIVE_ROOT = DEFAULT_STORAGE_ROOT / "sources" / "huggingface_daily"
+FEISHU_LOGIN_REDIRECT_PATH = "/auth/feishu/callback"
+FEISHU_AUTH_PAGE_URL = "https://open.feishu.cn/open-apis/authen/v1/index"
+FEISHU_APP_ACCESS_TOKEN_URL = "https://open.feishu.cn/open-apis/auth/v3/app_access_token/internal"
+FEISHU_USER_ACCESS_TOKEN_URL = "https://open.feishu.cn/open-apis/authen/v1/access_token"
+FEISHU_USER_INFO_URL = "https://open.feishu.cn/open-apis/authen/v1/user_info"
+FEISHU_USERNAME_PREFIX = "feishu-"
+
+
+@dataclass(frozen=True)
+class FeishuOAuthConfig:
+    app_id: str
+    app_secret: str
+    base_url: str
+    redirect_path: str = FEISHU_LOGIN_REDIRECT_PATH
+
+    @property
+    def callback_url(self) -> str:
+        return build_external_url(self.base_url, self.redirect_path)
 
 
 @dataclass
@@ -1806,20 +1828,181 @@ def load_env_file_values(path: Path) -> dict[str, str]:
     return values
 
 
-def resolve_login_credentials(base_dir: Path) -> tuple[str, str]:
+def resolve_runtime_env_values(base_dir: Path) -> dict[str, str]:
     env_file_path = Path(os.environ.get("PAPER_READER_ENV_FILE", str(base_dir / ".env")))
-    env_values = load_env_file_values(env_file_path)
-    username = (
-        env_values.get("PAPER_READER_LOGIN_USERNAME")
-        or os.environ.get("PAPER_READER_LOGIN_USERNAME")
-        or DEFAULT_LOGIN_USERNAME
-    )
-    password = (
-        env_values.get("PAPER_READER_LOGIN_PASSWORD")
-        or os.environ.get("PAPER_READER_LOGIN_PASSWORD")
-        or DEFAULT_LOGIN_PASSWORD
-    )
+    return load_env_file_values(env_file_path)
+
+
+def env_setting(env_values: dict[str, str], key: str, default: str = "") -> str:
+    return env_values.get(key) or os.environ.get(key) or default
+
+
+def resolve_login_credentials(base_dir: Path) -> tuple[str, str]:
+    env_values = resolve_runtime_env_values(base_dir)
+    username = env_setting(env_values, "PAPER_READER_LOGIN_USERNAME", DEFAULT_LOGIN_USERNAME)
+    password = env_setting(env_values, "PAPER_READER_LOGIN_PASSWORD", DEFAULT_LOGIN_PASSWORD)
     return username, password
+
+
+def resolve_secret_key(base_dir: Path) -> str:
+    env_values = resolve_runtime_env_values(base_dir)
+    return env_setting(env_values, "PAPER_READER_SECRET_KEY", DEFAULT_SECRET_KEY)
+
+
+def normalize_public_base_url(raw_value: str) -> str:
+    value = (raw_value or "").strip().rstrip("/")
+    if not value:
+        return ""
+
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment:
+        raise ValueError("PAPER_READER_BASE_URL 必须是完整的 http/https 地址，不能带 query 或 fragment。")
+
+    path = parsed.path.rstrip("/")
+    return f"{parsed.scheme}://{parsed.netloc}{path}"
+
+
+def build_external_url(base_url: str, path: str) -> str:
+    cleaned_path = "/" + path.lstrip("/")
+    cleaned_base = normalize_public_base_url(base_url)
+    return f"{cleaned_base}{cleaned_path}" if cleaned_base else cleaned_path
+
+
+def resolve_public_base_url(base_dir: Path) -> str:
+    env_values = resolve_runtime_env_values(base_dir)
+    return normalize_public_base_url(env_setting(env_values, "PAPER_READER_BASE_URL", ""))
+
+
+def resolve_feishu_oauth_config(base_dir: Path) -> FeishuOAuthConfig | None:
+    env_values = resolve_runtime_env_values(base_dir)
+    app_id = env_setting(env_values, "PAPER_READER_FEISHU_APP_ID", "").strip()
+    app_secret = env_setting(env_values, "PAPER_READER_FEISHU_APP_SECRET", "").strip()
+    base_url = resolve_public_base_url(base_dir)
+
+    if not app_id and not app_secret and not base_url:
+        return None
+
+    missing: list[str] = []
+    if not base_url:
+        missing.append("PAPER_READER_BASE_URL")
+    if not app_id:
+        missing.append("PAPER_READER_FEISHU_APP_ID")
+    if not app_secret:
+        missing.append("PAPER_READER_FEISHU_APP_SECRET")
+    if missing:
+        raise ValueError(f"启用飞书登录缺少配置: {', '.join(missing)}")
+
+    return FeishuOAuthConfig(app_id=app_id, app_secret=app_secret, base_url=base_url)
+
+
+def build_feishu_username(identity_key: str) -> str:
+    digest = hashlib.sha256(identity_key.encode("utf-8")).hexdigest()[:20]
+    return f"{FEISHU_USERNAME_PREFIX}{digest}"
+
+
+def is_safe_next_url(candidate: str | None) -> bool:
+    value = (candidate or "").strip()
+    if not value or value.startswith("//") or any(char in value for char in "\r\n"):
+        return False
+    parsed = urlparse(value)
+    return not parsed.scheme and not parsed.netloc and value.startswith("/")
+
+
+def normalize_next_url(candidate: str | None) -> str:
+    value = (candidate or "").strip()
+    return value if is_safe_next_url(value) else url_for("index")
+
+
+def open_json_request(
+    url: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: int = 30,
+) -> dict[str, Any]:
+    body = None
+    request_headers = {
+        "Accept": "application/json",
+        "User-Agent": "paper-reader/1.0",
+    }
+    if payload is not None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request_headers["Content-Type"] = "application/json; charset=utf-8"
+    if headers:
+        request_headers.update(headers)
+
+    request_obj = Request(url, data=body, headers=request_headers, method=method)
+    try:
+        with urlopen(request_obj, timeout=timeout) as response:
+            raw_body = response.read()
+    except HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise ValueError(f"请求飞书接口失败: HTTP {exc.code} {detail}") from exc
+    except URLError as exc:
+        raise ValueError(f"请求飞书接口失败: {exc.reason}") from exc
+
+    try:
+        parsed = json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("飞书接口返回了无法解析的 JSON。") from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError("飞书接口返回格式不是 JSON 对象。")
+    return parsed
+
+
+def feishu_response_message(payload: dict[str, Any]) -> str:
+    for key in ("msg", "message", "error", "error_description"):
+        value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "未知错误"
+
+
+def fetch_feishu_app_access_token(config: FeishuOAuthConfig) -> str:
+    payload = open_json_request(
+        FEISHU_APP_ACCESS_TOKEN_URL,
+        method="POST",
+        payload={"app_id": config.app_id, "app_secret": config.app_secret},
+    )
+    if payload.get("code") not in {0, "0"}:
+        raise ValueError(f"获取飞书 app_access_token 失败: {feishu_response_message(payload)}")
+    token = payload.get("app_access_token")
+    if not isinstance(token, str) or not token:
+        raise ValueError("飞书没有返回 app_access_token。")
+    return token
+
+
+def fetch_feishu_user_access_token(config: FeishuOAuthConfig, app_access_token: str, code: str) -> str:
+    payload = open_json_request(
+        FEISHU_USER_ACCESS_TOKEN_URL,
+        method="POST",
+        headers={"Authorization": f"Bearer {app_access_token}"},
+        payload={"grant_type": "authorization_code", "code": code, "app_id": config.app_id},
+    )
+    if payload.get("code") not in {0, "0"}:
+        raise ValueError(f"获取飞书 user_access_token 失败: {feishu_response_message(payload)}")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("飞书 user_access_token 返回缺少 data。")
+    token = data.get("access_token")
+    if not isinstance(token, str) or not token:
+        raise ValueError("飞书没有返回 user_access_token。")
+    return token
+
+
+def fetch_feishu_user_profile(user_access_token: str) -> dict[str, Any]:
+    payload = open_json_request(
+        FEISHU_USER_INFO_URL,
+        headers={"Authorization": f"Bearer {user_access_token}"},
+    )
+    if payload.get("code") not in {0, "0"}:
+        raise ValueError(f"获取飞书用户信息失败: {feishu_response_message(payload)}")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("飞书用户信息返回缺少 data。")
+    return data
 
 
 
@@ -1853,12 +2036,15 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     root.mkdir(parents=True, exist_ok=True)
     source_root.mkdir(parents=True, exist_ok=True)
     login_username, login_password = resolve_login_credentials(base_dir)
+    secret_key = resolve_secret_key(base_dir)
+    public_base_url = resolve_public_base_url(base_dir)
+    feishu_oauth = resolve_feishu_oauth_config(base_dir)
     app = Flask(
         __name__,
         template_folder=str(Path(__file__).with_name("templates")),
         static_folder=str(Path(__file__).with_name("static")),
     )
-    app.config["SECRET_KEY"] = "paper-reader-dev-secret"
+    app.config["SECRET_KEY"] = secret_key
     app.config["LIBRARY_ROOT"] = root.resolve()
     app.config["SOURCE_ARCHIVE_ROOT"] = source_root.resolve()
     app.config["AVATAR_ROOT"] = (root / AVATAR_DIR_NAME).resolve()
@@ -1867,6 +2053,8 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     Path(app.config["UPLOAD_STAGING_ROOT"]).mkdir(parents=True, exist_ok=True)
     app.config["LOGIN_USERNAME"] = login_username
     app.config["LOGIN_PASSWORD"] = login_password
+    app.config["PUBLIC_BASE_URL"] = public_base_url
+    app.config["FEISHU_OAUTH"] = feishu_oauth
     app.config["SESSION_COOKIE_HTTPONLY"] = True
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.settings_store = SettingsStore(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
@@ -1885,21 +2073,56 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     )
     app.action_queue = ActionTaskQueue(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
 
+    def clear_user_session() -> None:
+        for key in ("authenticated", "user_id", "username", "display_name", "role"):
+            session.pop(key, None)
+
+    def feishu_oauth_config() -> FeishuOAuthConfig | None:
+        config = app.config.get("FEISHU_OAUTH")
+        return config if isinstance(config, FeishuOAuthConfig) else None
+
+    def external_url_for(endpoint: str, **values: Any) -> str:
+        path = url_for(endpoint, **values)
+        base_url = str(app.config.get("PUBLIC_BASE_URL") or "")
+        return build_external_url(base_url, path)
+
+    def sync_feishu_user(profile: dict[str, Any]) -> TeamUser:
+        identity_key = str(profile.get("union_id") or profile.get("open_id") or "").strip()
+        if not identity_key:
+            raise ValueError("飞书用户信息里没有 union_id 或 open_id。")
+
+        username = build_feishu_username(identity_key)
+        display_name = str(profile.get("name") or profile.get("en_name") or profile.get("nickname") or username).strip() or username
+        user = app.team_store.get_user_by_username(username)  # type: ignore[attr-defined]
+
+        if user is None:
+            generated_password = f"{uuid.uuid4().hex}{uuid.uuid4().hex}"
+            return app.team_store.create_user(username, display_name, generated_password, "member")  # type: ignore[attr-defined]
+        if not user.is_active:
+            raise PermissionError("这个飞书账号对应的本地用户已停用，请联系管理员。")
+        if user.display_name != display_name:
+            user = app.team_store.update_user(user.id, display_name=display_name)  # type: ignore[attr-defined]
+        return user
+
     def current_user() -> TeamUser | None:
         user_id = session.get("user_id")
         if isinstance(user_id, int):
             user = app.team_store.get_user(user_id)  # type: ignore[attr-defined]
-            if user is not None:
+            if user is not None and user.is_active:
                 return user
+            if user is not None and not user.is_active:
+                clear_user_session()
+                return None
         username = session.get("username")
         if isinstance(username, str) and username:
             user = app.team_store.get_user_by_username(username)  # type: ignore[attr-defined]
-            if user is not None:
+            if user is not None and user.is_active:
                 session["user_id"] = user.id
                 session["display_name"] = user.display_name
                 session["role"] = user.role
                 session["authenticated"] = True
                 return user
+            clear_user_session()
         return None
 
     def current_user_id() -> int | None:
@@ -1954,7 +2177,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         return f"user-{user_id}{suffix.lower()}"
 
     def share_url_for_rel_path(rel_path: str) -> str:
-        return url_for("share_paper_route", rel_path=rel_path, _external=True)
+        return external_url_for("share_paper_route", rel_path=rel_path)
 
     def share_summary_for_paper(paper: PaperRecord) -> str:
         core_result = app.library.read_prompt_result(paper.rel_path, DEFAULT_PROMPT_SLUG)  # type: ignore[attr-defined]
@@ -2009,7 +2232,7 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
     @app.before_request
     def require_login() -> Any:
         endpoint = request.endpoint or ""
-        allowed = {"login", "register", "logout", "health"}
+        allowed = {"login", "register", "logout", "health", "feishu_login", "feishu_callback"}
         if endpoint in allowed or endpoint.startswith("static"):
             return None
         if session.get("authenticated") and current_user() is not None:
@@ -2086,9 +2309,10 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
 
     @app.route("/login", methods=["GET", "POST"])
     def login() -> Any:
-        next_url = request.values.get("next", "") or url_for("index")
+        next_url = normalize_next_url(request.values.get("next"))
         client_key = app.login_guard.key_for_request(request)  # type: ignore[attr-defined]
         status = app.login_guard.status_for(client_key)  # type: ignore[attr-defined]
+        feishu_config = feishu_oauth_config()
 
         if request.method == "POST":
             if status["locked"]:
@@ -2115,11 +2339,68 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
             next_url=next_url,
             locked=status["locked"],
             remaining_seconds=status["remaining_seconds"],
+            feishu_enabled=feishu_config is not None,
+            feishu_callback_url=feishu_config.callback_url if feishu_config is not None else "",
+            show_manual_login=request.method == "POST" or status["locked"] or feishu_config is None,
         )
+
+    @app.get("/login/feishu")
+    def feishu_login() -> Any:
+        config = feishu_oauth_config()
+        if config is None:
+            flash("飞书登录还没有配置。", "error")
+            return redirect(url_for("login"))
+
+        next_url = normalize_next_url(request.args.get("next"))
+        state = uuid.uuid4().hex
+        session["feishu_oauth_state"] = state
+        session["feishu_oauth_next"] = next_url
+        params = {
+            "app_id": config.app_id,
+            "redirect_uri": config.callback_url,
+            "state": state,
+        }
+        return redirect(f"{FEISHU_AUTH_PAGE_URL}?{urlencode(params)}")
+
+    @app.get(FEISHU_LOGIN_REDIRECT_PATH)
+    def feishu_callback() -> Any:
+        config = feishu_oauth_config()
+        next_url = normalize_next_url(session.pop("feishu_oauth_next", request.args.get("next")))
+        if config is None:
+            flash("飞书登录还没有配置。", "error")
+            return redirect(url_for("login", next=next_url))
+
+        error_message = (request.args.get("error_description") or request.args.get("error") or "").strip()
+        if error_message:
+            flash(f"飞书登录被取消或失败: {error_message}", "error")
+            return redirect(url_for("login", next=next_url))
+
+        returned_state = (request.args.get("state") or "").strip()
+        expected_state = str(session.pop("feishu_oauth_state", "") or "").strip()
+        if not returned_state or not expected_state or returned_state != expected_state:
+            flash("飞书登录状态校验失败，请重新发起登录。", "error")
+            return redirect(url_for("login", next=next_url))
+
+        code = (request.args.get("code") or "").strip()
+        if not code:
+            flash("飞书回调里没有 code。", "error")
+            return redirect(url_for("login", next=next_url))
+
+        try:
+            app_access_token = fetch_feishu_app_access_token(config)
+            user_access_token = fetch_feishu_user_access_token(config, app_access_token, code)
+            profile = fetch_feishu_user_profile(user_access_token)
+            user = sync_feishu_user(profile)
+        except (PermissionError, ValueError) as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("login", next=next_url))
+
+        start_user_session(user)
+        return redirect(next_url)
 
     @app.route("/register", methods=["GET", "POST"])
     def register() -> Any:
-        next_url = request.values.get("next", "") or url_for("index")
+        next_url = normalize_next_url(request.values.get("next"))
         if request.method == "POST":
             username = request.form.get("username", "").strip()
             display_name = request.form.get("display_name", "").strip()
@@ -4210,6 +4491,146 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
                 return {"error": str(exc)}, 400
             flash(str(exc), "error")
         return redirect_to_index(current_folder, query, sort_by, rel_path or None, tab, show_done=show_done)
+
+    @app.post("/chat/send-stream")
+    def chat_send_stream_route() -> Any:
+        rel_path = request.form.get("rel_path", "").strip("/")
+        visibility = request.form.get("visibility", "shared").strip().lower() or "shared"
+        actor = current_user()
+        if actor is None:
+            return {"error": "unauthorized"}, 401
+        message_body = request.form.get("body", "")
+        try:
+            ensure_paper_metadata(rel_path)
+            user_message_id = app.team_store.add_chat_message(  # type: ignore[attr-defined]
+                rel_path,
+                visibility=visibility,
+                body=message_body,
+                user_id=actor.id,
+                role="user",
+            )
+            history = app.team_store.chat_history(  # type: ignore[attr-defined]
+                rel_path,
+                visibility=visibility,
+                current_user_id=actor.id,
+                limit=10,
+            )
+            assistant_message_id = app.team_store.add_chat_message(  # type: ignore[attr-defined]
+                rel_path,
+                visibility=visibility,
+                body="Paper Bot 正在思考...",
+                user_id=actor.id if visibility == "private" else None,
+                role="assistant",
+                status="pending",
+                model=DEFAULT_MODEL,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            return {"error": str(exc)}, 400
+
+        def event_line(event: str, **payload: Any) -> str:
+            return json.dumps({"event": event, **payload}, ensure_ascii=False) + "\n"
+
+        def stream_chunks(text: str) -> list[str]:
+            chunks: list[str] = []
+            for line in text.splitlines(keepends=True):
+                if len(line) <= 96:
+                    chunks.append(line)
+                    continue
+                chunks.extend(line[index : index + 96] for index in range(0, len(line), 96))
+            return chunks or [text]
+
+        @stream_with_context
+        def generate() -> Any:
+            results: queue.Queue[tuple[str, str]] = queue.Queue(maxsize=1)
+
+            def run_answer() -> None:
+                try:
+                    document_path = Path(app.library.resolve_relative_path(rel_path))  # type: ignore[attr-defined]
+                    arxiv_markdown = app.library.ensure_arxiv_markdown_for_rel_path(rel_path)  # type: ignore[attr-defined]
+                    prompt_contexts = load_chat_prompt_contexts(rel_path, app.prompt_store.list_prompts())  # type: ignore[attr-defined]
+                    answer = answer_question_about_document(
+                        document_path,
+                        question=message_body.strip(),
+                        visibility=visibility,
+                        history=history,
+                        prompt_contexts=prompt_contexts,
+                        arxiv_markdown_path=(arxiv_markdown.markdown_path if arxiv_markdown is not None else None),
+                        model=DEFAULT_MODEL,
+                    )
+                    results.put(("answer", answer))
+                except Exception as exc:
+                    results.put(("error", str(exc)))
+
+            worker = threading.Thread(target=run_answer, name=f"paper-reader-chat-stream-{assistant_message_id}", daemon=True)
+            worker.start()
+
+            yield event_line(
+                "init",
+                user_message_id=user_message_id,
+                assistant_message_id=assistant_message_id,
+                context=serialize_chat_context(app.team_store.chat_context(rel_path, actor.id)),  # type: ignore[attr-defined]
+            )
+            yield event_line("status", assistant_message_id=assistant_message_id, text="Paper Bot 正在读取论文和历史对话。")
+
+            while True:
+                try:
+                    kind, value = results.get(timeout=2.0)
+                    break
+                except queue.Empty:
+                    yield event_line("status", assistant_message_id=assistant_message_id, text="Paper Bot 正在生成回复。")
+
+            if kind == "error":
+                if "429" in value or "Too Many Requests" in value:
+                    body = "Paper Bot 现在有点忙，刚刚碰到了速率限制。请等十几秒，再把这条问题发一次。"
+                else:
+                    body = f"这次回复没成功：{value}"
+                app.team_store.update_chat_message(  # type: ignore[attr-defined]
+                    assistant_message_id,
+                    body=body,
+                    status="failed",
+                    model=DEFAULT_MODEL,
+                )
+                yield event_line(
+                    "error",
+                    assistant_message_id=assistant_message_id,
+                    message=body,
+                    body_html=render_markdown(body),
+                    context=serialize_chat_context(app.team_store.chat_context(rel_path, actor.id)),  # type: ignore[attr-defined]
+                )
+                return
+
+            partial = ""
+            chunks = stream_chunks(value)
+            for index, chunk in enumerate(chunks, start=1):
+                partial += chunk
+                app.team_store.update_chat_message(  # type: ignore[attr-defined]
+                    assistant_message_id,
+                    body=partial,
+                    status="pending",
+                    model=DEFAULT_MODEL,
+                )
+                yield event_line(
+                    "partial",
+                    assistant_message_id=assistant_message_id,
+                    body=partial,
+                    body_html=render_markdown(partial),
+                )
+                if index < len(chunks):
+                    time.sleep(0.02)
+
+            app.team_store.update_chat_message(  # type: ignore[attr-defined]
+                assistant_message_id,
+                body=value,
+                status="completed",
+                model=DEFAULT_MODEL,
+            )
+            yield event_line(
+                "done",
+                assistant_message_id=assistant_message_id,
+                context=serialize_chat_context(app.team_store.chat_context(rel_path, actor.id)),  # type: ignore[attr-defined]
+            )
+
+        return Response(generate(), mimetype="application/x-ndjson")
 
     @app.post("/tags/add")
     def tag_add_route() -> Any:

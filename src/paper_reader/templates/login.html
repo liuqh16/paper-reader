@@ -1,32 +1,57 @@
 {% extends 'base.html' %}
 {% block title %}登录{% endblock %}
+{% macro local_login_form(next_url, locked, remaining_seconds, autofocus=False) %}
+  <form class="auth-form" action="{{ url_for('login') }}" method="post">
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <label>
+      <span>用户名</span>
+      <input type="text" name="username" autocomplete="username" {% if locked %}disabled{% endif %} {% if autofocus %}autofocus{% endif %}>
+    </label>
+    <label>
+      <span>密码</span>
+      <input type="password" name="password" autocomplete="current-password" {% if locked %}disabled{% endif %}>
+    </label>
+    {% if locked %}
+      <p class="auth-lock-note">当前已锁定，请在 {{ remaining_seconds }} 秒后重试。</p>
+    {% endif %}
+    <div class="tool-actions auth-form-actions">
+      <button type="submit" {% if locked %}disabled{% endif %}>登录</button>
+      <a class="button-link secondary" href="{{ url_for('register', next=next_url) }}">注册新账号</a>
+    </div>
+  </form>
+{% endmacro %}
 {% block content %}
 <section class="auth-shell">
-  <div class="auth-card card">
+  <div class="auth-card auth-card-login card">
     <div class="auth-copy">
       <p class="eyebrow">Secure Access</p>
-      <h2>登录团队论文阅读器</h2>
-      <p class="hero-copy">请使用团队账号登录。密码连续输错 3 次会锁定 5 分钟；如果你是第一次来，也可以先注册一个 member 账号。</p>
+      {% if feishu_enabled %}
+        <h2>使用飞书进入论文阅读器</h2>
+        <p class="hero-copy">团队成员优先通过飞书登录；本地账号入口已收起在下方。</p>
+      {% else %}
+        <h2>登录团队论文阅读器</h2>
+        <p class="hero-copy">请使用团队账号登录。密码连续输错 3 次会锁定 5 分钟；如果你是第一次来，也可以先注册一个 member 账号。</p>
+      {% endif %}
     </div>
 
-    <form class="auth-form" action="{{ url_for('login') }}" method="post">
-      <input type="hidden" name="next" value="{{ next_url }}">
-      <label>
-        <span>用户名</span>
-        <input type="text" name="username" autocomplete="username" {% if locked %}disabled{% endif %} autofocus>
-      </label>
-      <label>
-        <span>密码</span>
-        <input type="password" name="password" autocomplete="current-password" {% if locked %}disabled{% endif %}>
-      </label>
-      {% if locked %}
-        <p class="auth-lock-note">当前已锁定，请在 {{ remaining_seconds }} 秒后重试。</p>
-      {% endif %}
-      <div class="tool-actions">
-        <button type="submit" {% if locked %}disabled{% endif %}>登录</button>
-        <a class="button-link secondary" href="{{ url_for('register', next=next_url) }}">注册新账号</a>
+    {% if feishu_enabled %}
+      <div class="feishu-auth-panel">
+        <a class="button-link feishu-login-button" href="{{ url_for('feishu_login', next=next_url) }}">
+          <span class="feishu-login-text">使用飞书登录</span>
+          <span class="feishu-login-subtext">Feishu SSO</span>
+        </a>
+        <p class="auth-helper">首次飞书登录会自动创建 member 账号；管理员可以在团队设置里调整角色。</p>
       </div>
-    </form>
+
+      <details class="manual-login-panel" {% if show_manual_login %}open{% endif %}>
+        <summary>账号密码登录</summary>
+        <div class="manual-login-content">
+          {{ local_login_form(next_url, locked, remaining_seconds, show_manual_login) }}
+        </div>
+      </details>
+    {% else %}
+      {{ local_login_form(next_url, locked, remaining_seconds, True) }}
+    {% endif %}
   </div>
 </section>
 {% endblock %}

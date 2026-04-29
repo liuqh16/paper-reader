@@ -11,6 +11,7 @@ import time
 import unittest
 import zipfile
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 from unittest.mock import ANY, patch
 
 from pypdf import PdfWriter
@@ -72,6 +73,7 @@ class PaperReaderAppTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.library = Path(self.tempdir.name)
         self.source_tempdir = tempfile.TemporaryDirectory()
+        self.extra_apps = []
         self.env_file_path = self.library / ".test-no-env"
         self.env_patch = patch.dict(os.environ, {"PAPER_READER_ENV_FILE": str(self.env_file_path)}, clear=False)
         self.env_patch.start()
@@ -91,6 +93,10 @@ class PaperReaderAppTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         try:
+            for extra_app in self.extra_apps:
+                extra_app.action_queue.stop()
+                extra_app.job_queue.stop_all()
+            self.app.action_queue.stop()
             self.app.job_queue.stop_all()
             for _ in range(50):
                 snapshot = self.app.job_queue.snapshot(limit=5)
@@ -144,6 +150,26 @@ class PaperReaderAppTests(unittest.TestCase):
                 return payload
 
         return FakeResponse()
+
+    def make_feishu_app(self):
+        env_file = self.library / ".env.feishu"
+        env_file.write_text(
+            "\n".join(
+                [
+                    "PAPER_READER_SECRET_KEY=test-feishu-secret",
+                    "PAPER_READER_BASE_URL=https://paper-reader.macaron.xin",
+                    "PAPER_READER_FEISHU_APP_ID=cli_a964a2e78db85cef",
+                    "PAPER_READER_FEISHU_APP_SECRET=test-feishu-app-secret",
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        with patch.dict(os.environ, {"PAPER_READER_ENV_FILE": str(env_file)}, clear=False):
+            app = create_app(self.library, source_archive_root=self.source_root)
+        app.testing = True
+        self.extra_apps.append(app)
+        return app
 
     def login_client_as(self, client, username: str) -> None:
         user = self.app.team_store.get_user_by_username(username)
@@ -560,6 +586,86 @@ class PaperReaderAppTests(unittest.TestCase):
         self.assertEqual(custom_login.status_code, 302)
         self.assertEqual(custom_login.headers["Location"], "/")
 
+    def test_feishu_login_redirect_uses_configured_callback_url(self) -> None:
+        app = self.make_feishu_app()
+        client = app.test_client()
+
+        response = client.get("/login/feishu?next=/sources", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        location = response.headers["Location"]
+        parsed = urlparse(location)
+        query = parse_qs(parsed.query)
+
+        self.assertEqual(f"{parsed.scheme}://{parsed.netloc}{parsed.path}", paper_reader_app_module.FEISHU_AUTH_PAGE_URL)
+        self.assertEqual(query["app_id"][0], "cli_a964a2e78db85cef")
+        self.assertEqual(query["redirect_uri"][0], "https://paper-reader.macaron.xin/auth/feishu/callback")
+        self.assertTrue(query["state"][0])
+
+        with client.session_transaction() as session:
+            self.assertEqual(session["feishu_oauth_next"], "/sources")
+            self.assertEqual(session["feishu_oauth_state"], query["state"][0])
+
+    def test_feishu_callback_creates_member_and_logs_in(self) -> None:
+        app = self.make_feishu_app()
+        client = app.test_client()
+
+        start = client.get("/login/feishu?next=/sources", follow_redirects=False)
+        self.assertEqual(start.status_code, 302)
+        with client.session_transaction() as session:
+            state = session["feishu_oauth_state"]
+
+        def fake_urlopen(request_obj, timeout=30):
+            url = request_obj.full_url
+            headers = dict(request_obj.header_items())
+            if url == paper_reader_app_module.FEISHU_APP_ACCESS_TOKEN_URL:
+                payload = json.loads((request_obj.data or b"{}").decode("utf-8"))
+                self.assertEqual(payload["app_id"], "cli_a964a2e78db85cef")
+                return self.fake_markdown_response(
+                    json.dumps({"code": 0, "msg": "ok", "app_access_token": "app-access-token"})
+                )
+            if url == paper_reader_app_module.FEISHU_USER_ACCESS_TOKEN_URL:
+                payload = json.loads((request_obj.data or b"{}").decode("utf-8"))
+                self.assertEqual(headers.get("Authorization"), "Bearer app-access-token")
+                self.assertEqual(payload["grant_type"], "authorization_code")
+                self.assertEqual(payload["code"], "code-123")
+                self.assertEqual(payload["app_id"], "cli_a964a2e78db85cef")
+                return self.fake_markdown_response(
+                    json.dumps({"code": 0, "msg": "ok", "data": {"access_token": "user-access-token"}})
+                )
+            if url == paper_reader_app_module.FEISHU_USER_INFO_URL:
+                self.assertEqual(headers.get("Authorization"), "Bearer user-access-token")
+                return self.fake_markdown_response(
+                    json.dumps(
+                        {
+                            "code": 0,
+                            "msg": "ok",
+                            "data": {
+                                "open_id": "ou_test_feishu",
+                                "name": "Feishu Pony",
+                            },
+                        }
+                    )
+                )
+            raise AssertionError(url)
+
+        with patch.object(paper_reader_app_module, "urlopen", side_effect=fake_urlopen):
+            response = client.get(f"/auth/feishu/callback?code=code-123&state={state}", follow_redirects=False)
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers["Location"], "/sources")
+
+        username = paper_reader_app_module.build_feishu_username("ou_test_feishu")
+        user = app.team_store.get_user_by_username(username)
+        self.assertIsNotNone(user)
+        assert user is not None
+        self.assertEqual(user.display_name, "Feishu Pony")
+        self.assertEqual(user.role, "member")
+
+        with client.session_transaction() as session:
+            self.assertTrue(session["authenticated"])
+            self.assertEqual(session["username"], username)
+
     def test_register_creates_member_and_logs_in(self) -> None:
         client = self.app.test_client()
         response = client.post(
@@ -825,13 +931,28 @@ class PaperReaderAppTests(unittest.TestCase):
         writer = PdfWriter()
         writer.add_blank_page(width=72, height=72)
         writer.write(upload_bytes)
+        uploaded_content = upload_bytes.getvalue()
         upload_bytes.seek(0)
 
-        with patch.object(
-            self.app.job_queue,
-            "submit",
-            return_value={"queued": 1, "existing": 0, "skipped": 0, "invalid": 0, "job_ids": [], "jobs": []},
-        ) as mocked:
+        fake_task = paper_reader_app_module.ActionRecord(
+            id="memberupload1",
+            kind="upload-import",
+            title="上传整理：single.pdf",
+            source="upload",
+            requested_by_user_id=1,
+            requested_by_display_name="Alice",
+            status="queued",
+            progress=0,
+            message="任务已提交，等待处理。",
+            error=None,
+            result={},
+            payload={},
+            created_at="2026-04-19T00:00:00",
+            updated_at="2026-04-19T00:00:00",
+            started_at=None,
+            finished_at=None,
+        )
+        with patch.object(self.app.action_queue, "submit", return_value=fake_task) as mocked:
             response = client.post(
                 "/upload-file",
                 data={
@@ -845,15 +966,16 @@ class PaperReaderAppTests(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json["saved_rel_path"], "TeamInbox/alice/single.pdf")
-        mocked.assert_called_once_with(
-            ["TeamInbox/alice/single.pdf"],
-            ["core-zh"],
-            force=False,
-            source="upload",
-            requested_by_user_id=ANY,
-            requested_by_display_name="Alice",
-        )
+        self.assertEqual(response.json["status"], "queued")
+        self.assertIsNone(response.json["saved_rel_path"])
+        mocked.assert_called_once()
+        payload = mocked.call_args.kwargs["payload"]
+        self.assertEqual(payload["target_folder"], "TeamInbox/alice")
+        self.assertEqual(payload["staged_files"][0]["original_name"], "single.pdf")
+
+        member_file = self.library / "TeamInbox" / "alice" / "single.pdf"
+        member_file.parent.mkdir(parents=True, exist_ok=True)
+        member_file.write_bytes(uploaded_content)
 
         rename_response = client.post(
             "/rename",
@@ -1221,6 +1343,34 @@ class PaperReaderAppTests(unittest.TestCase):
         assert context_payload is not None
         self.assertIn("Paper Bot 正在思考...", str(context_payload["private"]))
         self.assertIn("pending", str(context_payload["private"]))
+
+    def test_chat_send_stream_route_streams_markdown_partials(self) -> None:
+        self.make_pdf(self.library / "paper.pdf", "Streaming Chat Paper")
+
+        with patch.object(paper_reader_app_module, "answer_question_about_document", return_value="**流式回答**\n\n公式 $x^2$。"):
+            response = self.client.post(
+                "/chat/send-stream",
+                data={
+                    "rel_path": "paper.pdf",
+                    "visibility": "private",
+                    "body": "请流式回答",
+                },
+            )
+            payload = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "application/x-ndjson")
+        self.assertIn('"event": "init"', payload)
+        self.assertIn('"event": "partial"', payload)
+        self.assertIn('"event": "done"', payload)
+        self.assertIn("<strong>流式回答</strong>", payload)
+
+        context_response = self.client.get("/chat/context?paper=paper.pdf")
+        self.assertEqual(context_response.status_code, 200)
+        context_payload = context_response.get_json()
+        assert context_payload is not None
+        self.assertIn("completed", str(context_payload["private"]))
+        self.assertIn("<strong>流式回答</strong>", str(context_payload["private"]))
 
     def test_chat_context_eventually_shows_background_reply(self) -> None:
         self.make_pdf(self.library / "paper.pdf", "Background Chat Paper")

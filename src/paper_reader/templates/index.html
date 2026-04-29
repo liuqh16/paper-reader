@@ -710,7 +710,7 @@
         <div class="team-chat-layout" data-chat-layout="private">
           <div class="team-chat-thread" data-chat-thread="private">
             {% for message in selected_chat_context.private.messages %}
-              <article class="team-chat-message role-{{ message.role }} status-{{ message.status }}" data-message-id="{{ message.id }}">
+              <article class="team-chat-message role-{{ message.role }} status-{{ message.status }}" data-message-id="{{ message.id }}" data-chat-message-id="{{ message.id }}">
                 <header class="chat-message-head">
                   {{ render_avatar(message.avatar_url, message.avatar_label, 'avatar avatar-sm chat-avatar') }}
                   <div class="chat-message-copy">
@@ -758,7 +758,7 @@
         <div class="team-chat-layout" data-chat-layout="shared">
           <div class="team-chat-thread" data-chat-thread="shared">
             {% for message in selected_chat_context.shared.messages %}
-              <article class="team-chat-message role-{{ message.role }} status-{{ message.status }}" data-message-id="{{ message.id }}">
+              <article class="team-chat-message role-{{ message.role }} status-{{ message.status }}" data-message-id="{{ message.id }}" data-chat-message-id="{{ message.id }}">
                 <header class="chat-message-head">
                   {{ render_avatar(message.avatar_url, message.avatar_label, 'avatar avatar-sm chat-avatar') }}
                   <div class="chat-message-copy">
@@ -1393,6 +1393,7 @@
       const sortBy = "{{ sort_by }}";
       const currentFolder = "{{ current_folder }}";
       const currentQuery = "{{ query }}";
+      const chatStreamUrl = "{{ url_for('chat_send_stream_route') }}";
       const layoutRoot = document.querySelector("[data-layout-root]");
       const centerStage = document.querySelector("[data-center-stage]");
       const settingsOrb = document.getElementById("settings-orb");
@@ -2413,7 +2414,7 @@
           ? `<span class="avatar avatar-sm chat-avatar"><img class="avatar-image" src="${escapeHtml(message.avatar_url)}" alt=""></span>`
           : `<span class="avatar avatar-sm chat-avatar"><span class="avatar-fallback">${escapeHtml(message.avatar_label || '?')}</span></span>`;
         return `
-          <article class="team-chat-message role-${escapeHtml(message.role)} status-${escapeHtml(message.status)}" data-message-id="${escapeHtml(message.id ?? "")}">
+          <article class="team-chat-message role-${escapeHtml(message.role)} status-${escapeHtml(message.status)}" data-message-id="${escapeHtml(message.id ?? "")}" data-chat-message-id="${escapeHtml(message.id ?? "")}">
             <header class="chat-message-head">
               ${avatarHtml}
               <div class="chat-message-copy">
@@ -2588,6 +2589,7 @@
         shared: readChatThreadState("shared"),
         private: readChatThreadState("private"),
       };
+      let activeChatStreams = 0;
 
       function isChatThreadNearBottom(container) {
         if (!container || container.clientHeight <= 0) return false;
@@ -2705,7 +2707,7 @@
       }
 
       async function refreshChatContext() {
-        if (!selectedPaper || document.hidden) {
+        if (!selectedPaper || document.hidden || activeChatStreams > 0) {
           scheduleChatRefresh(12000);
           return;
         }
@@ -2720,6 +2722,67 @@
         scheduleChatRefresh(hasPendingChatMessages(context) ? 1200 : 7000);
       }
 
+      function updateStreamingChatMessage(assistantMessageId, payload, status) {
+        const messageId = String(assistantMessageId || "");
+        if (!messageId) return;
+        const selector = `[data-chat-message-id="${CSS.escape(messageId)}"]`;
+        const messageNode = document.querySelector(selector);
+        if (!messageNode) return;
+        const bodyNode = messageNode.querySelector(".team-chat-body");
+        const wasNearBottom = isChatThreadNearBottom(messageNode.closest("[data-chat-thread]"));
+        messageNode.classList.remove("status-pending", "status-completed", "status-failed", "status-streaming");
+        messageNode.classList.add(`status-${status || "streaming"}`);
+        if (bodyNode && payload.body_html != null) {
+          bodyNode.innerHTML = payload.body_html;
+          queueMathTypeset(bodyNode);
+        } else if (bodyNode && payload.text) {
+          bodyNode.innerHTML = `<p>${escapeHtml(payload.text)}</p>`;
+        }
+        const container = messageNode.closest("[data-chat-thread]");
+        if (container && wasNearBottom) {
+          container.scrollTop = container.scrollHeight;
+        }
+      }
+
+      async function readChatStream(response) {
+        if (!response.body || typeof response.body.getReader !== "function") {
+          return null;
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let finalContext = null;
+        while (true) {
+          const { value, done } = await reader.read();
+          buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const payload = JSON.parse(line);
+            if (payload.event === "init") {
+              renderChatContext(payload.context || null);
+            } else if (payload.event === "status") {
+              updateStreamingChatMessage(payload.assistant_message_id, payload, "pending");
+            } else if (payload.event === "partial") {
+              updateStreamingChatMessage(payload.assistant_message_id, payload, "streaming");
+            } else if (payload.event === "done") {
+              finalContext = payload.context || finalContext;
+              updateStreamingChatMessage(payload.assistant_message_id, payload, "completed");
+            } else if (payload.event === "error") {
+              finalContext = payload.context || finalContext;
+              updateStreamingChatMessage(payload.assistant_message_id, payload, "failed");
+              throw new Error(payload.message || "回复生成失败");
+            }
+          }
+          if (done) break;
+        }
+        if (finalContext) {
+          renderChatContext(finalContext);
+        }
+        return finalContext;
+      }
+
       async function sendChatMessage(form) {
         const textarea = form.querySelector('textarea[name="body"]');
         const submitButton = form.querySelector('button[type="submit"]');
@@ -2729,25 +2792,28 @@
         }
         if (submitButton) submitButton.disabled = true;
         try {
-          const response = await fetch(form.action, {
+          activeChatStreams += 1;
+          const response = await fetch(chatStreamUrl, {
             method: "POST",
             body: new FormData(form),
-            headers: { "X-Requested-With": "fetch" },
+            headers: { "X-Requested-With": "fetch", "Accept": "application/x-ndjson" },
           });
-          const payload = await response.json().catch(() => ({}));
-          if (!response.ok || payload.error) {
+          if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
             throw new Error(payload.error || "发送失败");
           }
           if (textarea) {
             textarea.value = "";
             textarea.focus();
           }
-          const visibilityInput = form.querySelector('input[name="visibility"]');
-          const visibility = visibilityInput ? visibilityInput.value : null;
-          renderChatContext(payload.context || null, { forceScroll: true, visibility });
-          scheduleChatRefresh(900);
+          const streamedContext = await readChatStream(response);
+          if (!streamedContext) {
+            scheduleChatRefresh(600);
+          }
         } finally {
+          activeChatStreams = Math.max(0, activeChatStreams - 1);
           if (submitButton) submitButton.disabled = false;
+          scheduleChatRefresh(1200);
         }
       }
 

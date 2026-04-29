@@ -193,6 +193,127 @@ main {
   gap: 12px;
 }
 
+.auth-card-login {
+  width: min(100%, 460px);
+  gap: 18px;
+}
+
+.auth-card-login .auth-copy {
+  display: grid;
+  gap: 6px;
+  text-align: center;
+}
+
+.auth-card-login .hero-copy {
+  margin: 0;
+}
+
+.feishu-auth-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.button-link.feishu-login-button {
+  width: 100%;
+  min-height: 66px;
+  flex-direction: column;
+  gap: 4px;
+  border-color: rgba(29, 78, 216, 0.26);
+  border-radius: 16px;
+  background: linear-gradient(135deg, #1d4ed8 0%, #0f766e 100%);
+  color: #ffffff;
+  box-shadow: 0 16px 32px rgba(29, 78, 216, 0.22);
+  white-space: normal;
+}
+
+.button-link.feishu-login-button:hover {
+  border-color: rgba(15, 118, 110, 0.34);
+  background: linear-gradient(135deg, #1e40af 0%, #0f766e 100%);
+  color: #ffffff;
+  box-shadow: 0 18px 38px rgba(29, 78, 216, 0.26);
+}
+
+.feishu-login-text {
+  font-size: 1.02rem;
+  font-weight: 800;
+  line-height: 1.12;
+}
+
+.feishu-login-subtext {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  opacity: 0.78;
+  text-transform: uppercase;
+}
+
+.auth-helper {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--font-meta);
+  line-height: 1.45;
+  text-align: center;
+}
+
+.manual-login-panel {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.manual-login-panel summary {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 700;
+  list-style: none;
+  outline: none;
+}
+
+.manual-login-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.manual-login-panel summary::after {
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--brand);
+  content: "+";
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.86rem;
+  line-height: 1;
+}
+
+.manual-login-panel[open] summary::after {
+  content: "-";
+}
+
+.manual-login-panel summary:focus-visible {
+  border-radius: 999px;
+  box-shadow: 0 0 0 4px rgba(29, 78, 216, 0.10);
+}
+
+.manual-login-content {
+  margin-top: 10px;
+}
+
+.auth-form-actions {
+  justify-content: space-between;
+}
+
+.auth-form-actions button {
+  min-width: 104px;
+}
+
 .auth-lock-note {
   margin: 0;
   color: var(--danger);
@@ -1632,6 +1753,11 @@ main {
 .team-chat-message.status-pending {
   background: rgba(245, 158, 11, 0.1);
   border-color: rgba(245, 158, 11, 0.2);
+}
+.team-chat-message.status-streaming {
+  background: rgba(96, 165, 250, 0.14);
+  border-color: rgba(29, 78, 216, 0.24);
+  box-shadow: 0 0 0 1px rgba(29, 78, 216, 0.08), var(--shadow-sm);
 }
 .team-chat-message.status-failed {
   background: rgba(220, 38, 38, 0.06);
@@ -3587,6 +3713,23 @@ body.settings-open .settings-drawer {
   .hero-copy {
     font-size: 0.7rem;
     line-height: 1.3;
+  }
+  .auth-shell {
+    min-height: calc(100dvh - 112px);
+  }
+  .auth-card-login {
+    padding: 18px;
+    gap: 15px;
+  }
+  .button-link.feishu-login-button {
+    min-height: 62px;
+  }
+  .auth-form-actions {
+    align-items: stretch;
+  }
+  .auth-form-actions button,
+  .auth-form-actions .button-link {
+    flex: 1 1 130px;
   }
   .workspace-shell {
     gap: 8px;

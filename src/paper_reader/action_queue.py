@@ -48,7 +48,7 @@ class ActionTaskQueue:
         self._lock = threading.Lock()
         self._slot_condition = threading.Condition()
         self._active_executions = 0
-        self._queue: queue.Queue[str] = queue.Queue()
+        self._queue: queue.Queue[str | None] = queue.Queue()
         self._actions: dict[str, ActionRecord] = {}
         self._handlers: dict[str, ActionHandler] = {}
         self._cancelled_actions: set[str] = set()
@@ -67,6 +67,17 @@ class ActionTaskQueue:
     def register_handler(self, kind: str, handler: ActionHandler) -> None:
         with self._lock:
             self._handlers[kind] = handler
+
+    def stop(self, *, join_timeout: float = 1.0) -> None:
+        with self._lock:
+            workers = list(self._workers)
+            self._workers = []
+        if not workers:
+            return
+        for _ in workers:
+            self._queue.put(None)
+        for worker in workers:
+            worker.join(timeout=join_timeout)
 
     def _timestamp(self) -> str:
         return datetime.utcnow().isoformat(timespec="seconds")
@@ -170,6 +181,8 @@ class ActionTaskQueue:
         while True:
             action_id = self._queue.get()
             try:
+                if action_id is None:
+                    return
                 self._process_action(action_id)
             finally:
                 self._queue.task_done()
