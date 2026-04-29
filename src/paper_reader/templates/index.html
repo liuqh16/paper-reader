@@ -2562,8 +2562,10 @@
               data-outline-message-id="${escapeHtml(message.dataset.messageId || String(index + 1))}"
             >
               <div class="team-chat-outline-primary">
-                ${avatarHtml}
-                <strong class="team-chat-outline-name">${escapeHtml(speaker)}</strong>
+                <div class="team-chat-outline-speaker">
+                  ${avatarHtml}
+                  <strong class="team-chat-outline-name">${escapeHtml(speaker)}</strong>
+                </div>
                 <small class="team-chat-outline-time">${escapeHtml(createdAt)}</small>
               </div>
               <div class="team-chat-outline-secondary">${escapeHtml(outlineSnippet(bodyText, `对话 ${index + 1}`))}</div>
