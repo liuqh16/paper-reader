@@ -1635,19 +1635,21 @@ main {
   border-bottom: 1px solid rgba(15, 23, 42, 0.08);
 }
 .team-chat-outline-head strong {
-  font-size: 0.82rem;
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 .team-chat-outline-head span {
   color: var(--muted);
-  font-size: var(--font-meta);
+  font-size: 0.68rem;
+  line-height: 1.35;
 }
 .team-chat-outline-list {
   display: grid;
-  gap: 8px;
+  gap: 7px;
 }
 .team-chat-outline-item {
   display: grid;
-  gap: 4px;
+  gap: 5px;
   width: 100%;
   padding: 9px 10px;
   text-align: left;
@@ -1678,24 +1680,24 @@ main {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 0.82rem;
-  line-height: 1.35;
+  font-size: 0.76rem;
+  line-height: 1.45;
 }
 .team-chat-outline-time,
 .team-chat-outline-empty {
   color: var(--muted);
-  font-size: var(--font-meta);
+  font-size: 0.68rem;
+  line-height: 1.45;
 }
 .team-chat-outline-time {
   flex: 0 0 auto;
-  line-height: 1.35;
   white-space: nowrap;
 }
 .team-chat-outline-secondary {
-  min-height: calc(0.78rem * 1.35);
+  min-height: calc(0.72rem * 1.45);
   color: var(--ink);
-  font-size: 0.78rem;
-  line-height: 1.35;
+  font-size: 0.72rem;
+  line-height: 1.45;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
