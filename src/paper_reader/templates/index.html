@@ -2,6 +2,7 @@
 {% from '_comment_thread.html' import render_comments with context %}
 {% from '_avatar.html' import render_avatar %}
 {% block title %}论文阅读器{% endblock %}
+{% block body_attrs %} class="reader-index-page"{% endblock %}
 {% block content %}
 <section class="workspace-shell tri-workspace" data-layout-root>
   <aside class="sidebar-pane card layout-pane pane-left" data-pane="left">
@@ -839,6 +840,326 @@
   </button>
 </section>
 
+<section class="mobile-reader-shell" data-mobile-reader-shell data-mobile-section="read" data-mobile-selected-tab="{{ selected_tab }}" aria-label="移动端论文阅读器">
+
+  <div class="mobile-reader-body">
+    <section class="mobile-reader-section" data-mobile-reader-section="library" aria-label="移动端论文列表" hidden>
+      <div class="mobile-library-top">
+        <form class="mobile-search-form" action="{{ url_for('index') }}" method="get">
+          <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
+          <input type="hidden" name="tab" value="{{ selected_tab }}">
+          <input type="hidden" name="folder" value="{{ current_folder }}">
+          <input type="hidden" name="sort" value="{{ sort_by }}">
+          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+          <input type="search" name="q" value="{{ query }}" placeholder="搜索标题、标签…">
+          <button type="submit">搜索</button>
+        </form>
+        <details class="mobile-filter-drawer" {% if current_folder or sort_by != 'date_desc' or show_done %}open{% endif %}>
+          <summary>筛选与排序</summary>
+          <form class="mobile-filter-form" action="{{ url_for('index') }}" method="get">
+            <input type="hidden" name="paper" value="{{ selected_paper.rel_path if selected_paper else '' }}">
+            <input type="hidden" name="tab" value="{{ selected_tab }}">
+            <input type="hidden" name="q" value="{{ query }}">
+            <select name="folder">
+              <option value="" {% if not current_folder %}selected{% endif %}>全部文件夹</option>
+              {% for folder in folders %}
+                {% if folder %}<option value="{{ folder }}" {% if current_folder == folder %}selected{% endif %}>{{ folder }}</option>{% endif %}
+              {% endfor %}
+            </select>
+            <select name="sort">
+              <option value="date_desc" {% if sort_by == 'date_desc' %}selected{% endif %}>日期从新到旧</option>
+              <option value="date_asc" {% if sort_by == 'date_asc' %}selected{% endif %}>日期从旧到新</option>
+              <option value="title" {% if sort_by == 'title' %}selected{% endif %}>按标题</option>
+            </select>
+            <label class="checkbox-line">
+              <input type="checkbox" name="show_done" value="1" {% if show_done %}checked{% endif %}>
+              显示我已读的论文
+            </label>
+            <button type="submit">更新筛选</button>
+          </form>
+        </details>
+      </div>
+
+      {% if recommendation_feed %}
+        <div class="mobile-recommend-strip">
+          <h3 class="mobile-strip-title">团队推荐 · {{ recommendation_feed|length }} 篇</h3>
+          <div class="mobile-recommend-scroll">
+            {% for paper in recommendation_feed %}
+              <a class="mobile-recommend-chip {% if selected_paper and paper.rel_path == selected_paper.rel_path %}active{% endif %}" href="{{ paper.paper_url }}" data-mobile-open-reader>
+                <strong>{{ paper.display_title }}</strong>
+                <span>{{ paper.extracted_date or paper.file_name }}</span>
+              </a>
+            {% endfor %}
+          </div>
+        </div>
+      {% endif %}
+
+      <div class="mobile-library-tree">
+        <h3 class="mobile-strip-title">全部论文 · {{ papers|length }} 篇</h3>
+        {% for year_group in sidebar_groups %}
+          <details class="mobile-paper-group" {% if year_group.is_open %}open{% endif %}>
+            <summary>{{ year_group.label }} <span>{{ year_group.count }}</span></summary>
+            {% for month_group in year_group.months %}
+              <details class="mobile-paper-subgroup" {% if month_group.is_open %}open{% endif %}>
+                <summary>{{ month_group.label }} <span>{{ month_group.count }}</span></summary>
+                {% for paper in month_group.papers %}
+                  <a class="mobile-paper-card {% if selected_paper and paper.rel_path == selected_paper.rel_path %}active{% endif %}" href="{{ url_for('index', folder=current_folder, q=query, sort=sort_by, paper=paper.rel_path, tab=selected_tab if selected_paper and paper.rel_path == selected_paper.rel_path else 'source', show_done='1' if show_done else None) }}" data-mobile-open-reader>
+                    <strong>{{ paper.display_title }}</strong>
+                    <span>{{ paper.extracted_date or paper.file_name }}{% if paper.folder %} · {{ paper.folder }}{% endif %}{% if paper.is_done %} · 已读{% endif %}</span>
+                  </a>
+                {% endfor %}
+              </details>
+            {% endfor %}
+          </details>
+        {% else %}
+          <p class="team-empty-copy">没有匹配结果。</p>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="mobile-reader-section" data-mobile-reader-section="read" aria-label="移动端阅读区">
+      {% if selected_paper %}
+        <header class="mobile-read-bar">
+          <div class="mobile-read-bar-main">
+            <strong>{{ selected_paper.display_title }}</strong>
+            <span>{{ selected_paper.extracted_date or '无日期' }} · {{ format_bytes(selected_paper.file_size) }}</span>
+          </div>
+          <div class="mobile-read-bar-actions">
+            <a class="mobile-action-btn mobile-pdf-open-btn" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer" aria-label="打开 PDF">PDF</a>
+            <form action="{{ url_for('recommend_route') }}" method="post" class="inline-form">
+              <input type="hidden" name="folder" value="{{ current_folder }}">
+              <input type="hidden" name="q" value="{{ query }}">
+              <input type="hidden" name="sort" value="{{ sort_by }}">
+              <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+              <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+              <input type="hidden" name="tab" value="{{ selected_tab }}">
+              <input type="hidden" name="mode" value="toggle">
+              <button type="submit" class="mobile-action-btn {% if selected_paper_context.recommended_by_current_user %}is-active{% endif %}">{% if selected_paper_context.recommended_by_current_user %}♥{% else %}♡{% endif %}</button>
+            </form>
+            <form action="{{ url_for('done_toggle_route') }}" method="post" class="inline-form">
+              <input type="hidden" name="folder" value="{{ current_folder }}">
+              <input type="hidden" name="q" value="{{ query }}">
+              <input type="hidden" name="sort" value="{{ sort_by }}">
+              <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+              <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+              <input type="hidden" name="tab" value="{{ selected_tab }}">
+              <button type="submit" class="mobile-action-btn {% if selected_paper.is_done %}is-active{% endif %}">{% if selected_paper.is_done %}✓{% else %}○{% endif %}</button>
+            </form>
+          </div>
+        </header>
+
+        <div class="mobile-read-tabs">
+          {% for tab in viewer_tabs if tab.exists %}
+            <a class="mobile-read-tab {% if selected_tab == tab.slug %}active{% endif %}" href="{{ url_for('index', folder=current_folder, q=query, sort=sort_by, paper=selected_paper.rel_path, tab=tab.slug, show_done='1' if show_done else None) }}">{{ tab.name }}</a>
+          {% else %}
+            <span class="mobile-read-tab-placeholder">还没有可阅读的解读</span>
+          {% endfor %}
+        </div>
+
+        <div class="mobile-doc-viewer">
+          {% if selected_tab == 'source' %}
+            <div class="mobile-doc-empty">
+              <h3>移动端请打开 PDF 或选择解读</h3>
+              <p>手机浏览器通常无法稳定内嵌阅读 PDF；请用上方 PDF 按钮打开原文，或切换到已有 markdown 解读。</p>
+              <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开 PDF</a>
+            </div>
+          {% elif selected_prompt %}
+            {% if selected_prompt_content %}
+              <header class="mobile-doc-title">
+                <span>{{ selected_prompt.name }}</span>
+                <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">原文件</a>
+              </header>
+              <article class="mobile-markdown-scroll markdown-render">{{ selected_prompt_html }}</article>
+            {% else %}
+              <div class="mobile-doc-empty">
+                <h3>{{ selected_prompt.name }}</h3>
+                <p>这份解读还没生成。</p>
+                <form action="{{ url_for('prompt_run_route') }}" method="post" class="inline-form centered-form">
+                  <input type="hidden" name="folder" value="{{ current_folder }}">
+                  <input type="hidden" name="q" value="{{ query }}">
+                  <input type="hidden" name="sort" value="{{ sort_by }}">
+                  <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+                  <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+                  <input type="hidden" name="prompt_slug" value="{{ selected_prompt.slug }}">
+                  <button type="submit">现在生成</button>
+                </form>
+              </div>
+            {% endif %}
+          {% endif %}
+        </div>
+      {% else %}
+        <div class="mobile-doc-empty">
+          <h3>论文阅读器</h3>
+          <p>在“列表”中选择一篇论文开始阅读。</p>
+        </div>
+      {% endif %}
+    </section>
+
+    <section class="mobile-reader-section" data-mobile-reader-section="collab" aria-label="移动端协作区" hidden>
+      {% if selected_paper %}
+        <div class="mobile-collab-tabs" role="tablist" aria-label="移动端协作切换">
+          <button type="button" data-mobile-collab-button="activity" aria-pressed="true">记录</button>
+          <button type="button" data-mobile-collab-button="private" aria-pressed="false">我爱学</button>
+          <button type="button" data-mobile-collab-button="shared" aria-pressed="false">一起学</button>
+        </div>
+
+        <section class="mobile-collab-panel" data-mobile-collab-panel="activity">
+          <div class="mobile-collab-scroll">
+            <div class="mobile-collab-stats">
+              <div class="mobile-stat-chip">
+                <small>推荐</small>
+                <strong>{{ selected_paper_context.recommendation_count }}</strong>
+              </div>
+              <div class="mobile-stat-chip">
+                <small>解读</small>
+                <strong>{{ selected_paper_context.prompt_runs|length }}</strong>
+              </div>
+              <div class="mobile-stat-chip">
+                <small>评论</small>
+                <strong>{{ selected_paper_context.comment_count }}</strong>
+              </div>
+              <div class="mobile-stat-chip">
+                <small>来源</small>
+                <strong>{{ selected_paper_context.sources|length }}</strong>
+              </div>
+            </div>
+
+            <div class="mobile-section-card">
+              <div class="mobile-section-title">
+                <div><h3>评论</h3><p>写下判断、疑问或复现记录</p></div>
+              </div>
+              <form action="{{ url_for('comment_route') }}" method="post" class="mobile-stack-form">
+                <input type="hidden" name="folder" value="{{ current_folder }}">
+                <input type="hidden" name="q" value="{{ query }}">
+                <input type="hidden" name="sort" value="{{ sort_by }}">
+                <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+                <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+                <input type="hidden" name="tab" value="{{ selected_tab }}">
+                <textarea name="body" rows="3" placeholder="写下你的判断、疑问或复现记录"></textarea>
+                <button type="submit">发布评论</button>
+              </form>
+              {{ render_comments(selected_paper_context.comments) }}
+            </div>
+          </div>
+        </section>
+
+        {% for mobile_chat in [('private', '我爱学', selected_chat_context.private), ('shared', '一起学', selected_chat_context.shared)] %}
+          {% set mobile_visibility = mobile_chat[0] %}
+          {% set mobile_title = mobile_chat[1] %}
+          {% set mobile_thread = mobile_chat[2] %}
+          <section class="mobile-collab-panel" data-mobile-collab-panel="{{ mobile_visibility }}" hidden>
+            <div class="mobile-chat-thread">
+              {% for message in mobile_thread.messages %}
+                <article id="mobile-chat-{{ mobile_visibility }}-{{ message.id }}" class="mobile-chat-message role-{{ message.role }} status-{{ message.status }}" data-message-id="{{ message.id }}">
+                  <header>
+                    {{ render_avatar(message.avatar_url, message.avatar_label, 'avatar avatar-sm chat-avatar') }}
+                    <div><strong>{{ message.display_name }}</strong><small>{{ message.created_at }}</small></div>
+                  </header>
+                  <div class="team-chat-body markdown-render">{{ message.body_html|safe }}</div>
+                </article>
+              {% else %}
+                <p class="team-empty-copy">还没有消息。</p>
+              {% endfor %}
+            </div>
+            {% if mobile_visibility == 'shared' %}
+              <details class="mobile-chat-outline-drawer">
+                <summary>Outline</summary>
+                <div class="mobile-chat-outline-list">
+                  {% for message in mobile_thread.messages if message.role == 'user' %}
+                    <a href="#mobile-chat-{{ mobile_visibility }}-{{ message.id }}">
+                      <strong>{{ message.display_name }}</strong>
+                      <span>{{ message.created_at }}</span>
+                      <em>{{ message.body_text or message.body_plain or message.body or '历史提问' }}</em>
+                    </a>
+                  {% else %}
+                    <p>还没有可跳转的历史提问。</p>
+                  {% endfor %}
+                </div>
+              </details>
+            {% endif %}
+            <form action="{{ url_for('chat_send_route') }}" method="post" class="mobile-chat-form">
+              <input type="hidden" name="folder" value="{{ current_folder }}">
+              <input type="hidden" name="q" value="{{ query }}">
+              <input type="hidden" name="sort" value="{{ sort_by }}">
+              <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+              <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+              <input type="hidden" name="tab" value="{{ selected_tab }}">
+              <input type="hidden" name="visibility" value="{{ mobile_visibility }}">
+              <textarea name="body" rows="2" placeholder="发到{{ mobile_title }}"></textarea>
+              <button type="submit">发送</button>
+            </form>
+          </section>
+        {% endfor %}
+      {% else %}
+        <div class="mobile-doc-empty">
+          <h3>还没有选中文件</h3>
+          <p>选中论文后这里会显示协作记录、我爱学和一起学。</p>
+        </div>
+      {% endif %}
+    </section>
+
+    <section class="mobile-reader-section" data-mobile-reader-section="tools" aria-label="移动端工具区" hidden>
+      <div class="mobile-section-card">
+        <div class="mobile-section-title">
+          <div><p class="eyebrow">工具</p><h3>常用操作</h3></div>
+        </div>
+        <div class="mobile-tool-grid">
+          <a class="button-link secondary" href="{{ url_for('sources_index') }}" target="_blank" rel="noreferrer">Sources</a>
+          <a class="button-link secondary" href="{{ url_for('insights_index') }}" target="_blank" rel="noreferrer">Insights</a>
+          {% if selected_paper %}
+            <a class="button-link secondary" href="{{ url_for('serve_file', rel_path=selected_paper.rel_path) }}" target="_blank" rel="noreferrer">打开原文件</a>
+          {% endif %}
+        </div>
+      </div>
+      {% if selected_paper %}
+        <div class="mobile-section-card">
+          <h3>论文状态</h3>
+          <div class="mobile-tool-grid">
+            <form action="{{ url_for('recommend_route') }}" method="post">
+              <input type="hidden" name="folder" value="{{ current_folder }}">
+              <input type="hidden" name="q" value="{{ query }}">
+              <input type="hidden" name="sort" value="{{ sort_by }}">
+              <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+              <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+              <input type="hidden" name="tab" value="{{ selected_tab }}">
+              <input type="hidden" name="mode" value="toggle">
+              <button type="submit" class="secondary">{% if selected_paper_context.recommended_by_current_user %}取消推荐{% else %}加入推荐{% endif %}</button>
+            </form>
+            <form action="{{ url_for('done_toggle_route') }}" method="post">
+              <input type="hidden" name="folder" value="{{ current_folder }}">
+              <input type="hidden" name="q" value="{{ query }}">
+              <input type="hidden" name="sort" value="{{ sort_by }}">
+              <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+              <input type="hidden" name="rel_path" value="{{ selected_paper.rel_path }}">
+              <input type="hidden" name="tab" value="{{ selected_tab }}">
+              <button type="submit" class="secondary">{% if selected_paper.is_done %}恢复未读{% else %}标记已读{% endif %}</button>
+            </form>
+          </div>
+        </div>
+      {% endif %}
+      <details class="mobile-section-card mobile-tool-details">
+        <summary>导入远程论文</summary>
+        <form class="mobile-stack-form" action="{{ url_for('import_link_route') }}" method="post">
+          <input type="hidden" name="folder" value="{{ current_folder }}">
+          <input type="hidden" name="q" value="{{ query }}">
+          <input type="hidden" name="sort" value="{{ sort_by }}">
+          <input type="hidden" name="show_done" value="{{ '1' if show_done else '' }}">
+          <textarea name="import_target" rows="3" placeholder="arXiv ID / arXiv 链接 / PDF 链接"></textarea>
+          <input type="text" name="recommendation_reason" placeholder="推荐理由（可选）">
+          <button type="submit">导入</button>
+        </form>
+      </details>
+    </section>
+  </div>
+
+  <nav class="mobile-reader-tabbar" aria-label="移动端底部导航">
+    <button type="button" data-mobile-reader-button="library" aria-pressed="false">列表</button>
+    <button type="button" data-mobile-reader-button="read" aria-pressed="true">阅读</button>
+    <button type="button" data-mobile-reader-button="collab" aria-pressed="false">交流</button>
+    <button type="button" data-mobile-reader-button="tools" aria-pressed="false">工具</button>
+  </nav>
+</section>
+
 <div class="workspace-orbit-dock" role="toolbar" aria-label="工作区快捷操作">
   <button type="button" class="icon-button workspace-dock-button" data-pane-button="left" data-toggle-pane="left" title="切换导航栏" aria-label="切换导航栏">
     <span class="icon-shell" aria-hidden="true">
@@ -1413,6 +1734,12 @@
       const currentQuery = "{{ query }}";
       const chatStreamUrl = "{{ url_for('chat_send_stream_route') }}";
       const layoutRoot = document.querySelector("[data-layout-root]");
+      const mobileReaderShell = document.querySelector("[data-mobile-reader-shell]");
+      const mobileReaderSections = Array.from(document.querySelectorAll("[data-mobile-reader-section]"));
+      const mobileReaderButtons = Array.from(document.querySelectorAll("[data-mobile-reader-button]"));
+      const mobileReaderLinks = Array.from(document.querySelectorAll("[data-mobile-open-reader]"));
+      const mobileCollabButtons = Array.from(document.querySelectorAll("[data-mobile-collab-button]"));
+      const mobileCollabPanels = Array.from(document.querySelectorAll("[data-mobile-collab-panel]"));
       const centerStage = document.querySelector("[data-center-stage]");
       const settingsOrb = document.getElementById("settings-orb");
       const settingsDrawer = document.querySelector("[data-settings-drawer]");
@@ -1445,6 +1772,8 @@
       const collapsibleStateKey = "paper-reader-collapsible-v1";
       const chatPanelStateKey = "paper-reader-chat-panel-v2";
       const sidebarPanelStateKey = "paper-reader-sidebar-panel-v1";
+      const mobileReaderSectionStateKey = "paper-reader-mobile-section-v1";
+      const mobileCollabPanelStateKey = "paper-reader-mobile-collab-v1";
       const defaultLayoutState = {
         leftWidth: 264,
         rightWidth: 388,
@@ -1462,6 +1791,8 @@
       let collapsibleState = loadCollapsibleState();
       let activeChatPanel = loadSimpleValue(chatPanelStateKey, "activity");
       let activeSidebarPanel = loadSimpleValue(sidebarPanelStateKey, "library");
+      let activeMobileReaderSection = loadSimpleValue(mobileReaderSectionStateKey, "read");
+      let activeMobileCollabPanel = loadSimpleValue(mobileCollabPanelStateKey, "activity");
       let settingsReturnFocus = null;
       let shareFeedbackTimer = null;
 
@@ -1512,6 +1843,96 @@
       function parseCountText(node) {
         const parsed = Number.parseInt((node && node.textContent) || "0", 10);
         return Number.isFinite(parsed) ? parsed : 0;
+      }
+
+      function isMobileReaderViewport() {
+        return window.matchMedia("(max-width: 820px)").matches;
+      }
+
+      function normalizeMobileReaderSection(section) {
+        return ["library", "read", "collab", "tools"].includes(section) ? section : "read";
+      }
+
+      function loadMobileFrames(scope = mobileReaderShell) {
+        if (!scope || !isMobileReaderViewport()) return;
+        scope.querySelectorAll("iframe[data-mobile-src]:not([src])").forEach((frame) => {
+          frame.setAttribute("src", frame.dataset.mobileSrc || "");
+        });
+      }
+
+      function setMobileReaderSection(section, { persist = true } = {}) {
+        activeMobileReaderSection = normalizeMobileReaderSection(section);
+        if (mobileReaderShell) {
+          mobileReaderShell.dataset.mobileSection = activeMobileReaderSection;
+        }
+        mobileReaderSections.forEach((panel) => {
+          const visible = (panel.dataset.mobileReaderSection || "") === activeMobileReaderSection;
+          panel.hidden = !visible;
+        });
+        mobileReaderButtons.forEach((button) => {
+          const active = (button.dataset.mobileReaderButton || "") === activeMobileReaderSection;
+          button.classList.toggle("is-active", active);
+          button.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+        if (activeMobileReaderSection === "read") {
+          loadMobileFrames(mobileReaderShell);
+          redirectMobileSourceToFirstPrompt();
+        }
+        if (persist) {
+          persistSimpleValue(mobileReaderSectionStateKey, activeMobileReaderSection);
+        }
+      }
+
+      function setMobileCollabPanel(panel, { persist = true } = {}) {
+        activeMobileCollabPanel = ["activity", "private", "shared"].includes(panel) ? panel : "activity";
+        mobileCollabPanels.forEach((node) => {
+          const visible = (node.dataset.mobileCollabPanel || "") === activeMobileCollabPanel;
+          node.hidden = !visible;
+        });
+        mobileCollabButtons.forEach((button) => {
+          const active = (button.dataset.mobileCollabButton || "") === activeMobileCollabPanel;
+          button.classList.toggle("is-active", active);
+          button.setAttribute("aria-pressed", active ? "true" : "false");
+        });
+        if (persist) {
+          persistSimpleValue(mobileCollabPanelStateKey, activeMobileCollabPanel);
+        }
+      }
+
+      function redirectMobileSourceToFirstPrompt() {
+        if (!mobileReaderShell || !isMobileReaderViewport()) return;
+        if ((mobileReaderShell.dataset.mobileSelectedTab || "source") !== "source") return;
+        const firstPromptTab = mobileReaderShell.querySelector(".mobile-read-tab[href]");
+        if (!firstPromptTab || firstPromptTab.classList.contains("active")) return;
+        window.location.replace(firstPromptTab.href);
+      }
+
+      function initializeMobileReaderShell() {
+        if (!mobileReaderShell) return;
+        setMobileReaderSection(activeMobileReaderSection, { persist: false });
+        setMobileCollabPanel(activeMobileCollabPanel, { persist: false });
+        mobileReaderButtons.forEach((button) => {
+          button.addEventListener("click", () => setMobileReaderSection(button.dataset.mobileReaderButton || "read"));
+        });
+        mobileReaderLinks.forEach((link) => {
+          link.addEventListener("click", () => persistSimpleValue(mobileReaderSectionStateKey, "read"));
+        });
+        mobileCollabButtons.forEach((button) => {
+          button.addEventListener("click", () => setMobileCollabPanel(button.dataset.mobileCollabButton || "activity"));
+        });
+        document.addEventListener("click", (event) => {
+          if (!isMobileReaderViewport()) return;
+          const target = event.target instanceof Element ? event.target : null;
+          if (!target) return;
+          mobileReaderShell.querySelectorAll(".mobile-chat-outline-drawer[open]").forEach((drawer) => {
+            if (!drawer.contains(target)) {
+              drawer.removeAttribute("open");
+            }
+          });
+        });
+        window.addEventListener("resize", () => {
+          if (activeMobileReaderSection === "read") loadMobileFrames(mobileReaderShell);
+        });
       }
 
       let shareRestoreText = null;
@@ -2105,6 +2526,7 @@
 
       paneResizers.forEach(bindPaneResizer);
       chatOutlineResizers.forEach(bindChatOutlineResizer);
+      initializeMobileReaderShell();
       applyLayoutState();
       if (shareButton) {
         shareButton.addEventListener("click", () => {

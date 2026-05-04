@@ -25,7 +25,7 @@
     </script>
     <script defer src="{{ url_for('static', filename='vendor/mathjax/tex-svg.js') }}"></script>
   </head>
-  <body>
+  <body{% block body_attrs %}{% endblock %}>
     <div class="page-shell">
       <header class="hero hero-compact">
         <div class="hero-brand">
