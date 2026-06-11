@@ -2038,7 +2038,12 @@ def redirect_to_index(
 
 
 
-def create_app(library_root: Path | None = None, source_archive_root: Path | None = None) -> Flask:
+def create_app(
+    library_root: Path | None = None,
+    source_archive_root: Path | None = None,
+    *,
+    start_source_scheduler: bool = False,
+) -> Flask:
     base_dir = Path(__file__).resolve().parents[2]
     root = (library_root or DEFAULT_LIBRARY_ROOT).resolve()
     source_root = (source_archive_root or DEFAULT_SOURCE_ARCHIVE_ROOT).resolve()
@@ -2081,6 +2086,17 @@ def create_app(library_root: Path | None = None, source_archive_root: Path | Non
         max_concurrency=app.settings_store.max_concurrency(),  # type: ignore[attr-defined]
     )
     app.action_queue = ActionTaskQueue(app.config["LIBRARY_ROOT"])  # type: ignore[attr-defined]
+    app.source_scheduler = None  # type: ignore[attr-defined]
+    if start_source_scheduler:
+        try:
+            from .source_scheduler import start_source_scheduler as start_scheduler
+
+            app.source_scheduler = start_scheduler(  # type: ignore[attr-defined]
+                Path(app.config["SOURCE_ARCHIVE_ROOT"]),
+                base_dir=base_dir,
+            )
+        except Exception as exc:  # pragma: no cover - operational startup path
+            print(f"Failed to start source scheduler: {exc}", flush=True)
 
     def clear_user_session() -> None:
         for key in ("authenticated", "user_id", "username", "display_name", "role"):
