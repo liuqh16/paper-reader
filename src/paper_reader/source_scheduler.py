@@ -5,6 +5,8 @@ from datetime import date, datetime, time, timedelta, timezone
 import importlib
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import threading
 from typing import Any
@@ -14,6 +16,8 @@ PACIFIC_TZ = ZoneInfo("America/Los_Angeles")
 SCHEDULE_TIME = time(hour=1, minute=0, second=0)
 DEFAULT_MIN_UPVOTES = 5
 DEFAULT_POLL_SECONDS = 300
+PDF_DOWNLOAD_TIMEOUT_SECONDS = 30
+PDF_CONNECT_TIMEOUT_SECONDS = 10
 STATE_FILE_NAME = "service_state.json"
 
 
@@ -117,6 +121,7 @@ def _collect_previous_pacific_day(data_dir: Path, *, min_upvotes: int, run_reaso
 
 
 def _collect_date(data_dir: Path, target_date: date, *, min_upvotes: int, run_reason: str) -> Path:
+    _ensure_source_package_on_path(Path(__file__).resolve().parents[2])
     huggingface_module = importlib.import_module("paper_reader_source.huggingface")
     service_module = importlib.import_module("paper_reader_source.service")
 
@@ -124,6 +129,8 @@ def _collect_date(data_dir: Path, target_date: date, *, min_upvotes: int, run_re
     now_utc = datetime.now(timezone.utc)
     snapshot = huggingface_module.fetch_daily_snapshot(target_date.isoformat())
     filtered = huggingface_module.filter_papers_by_upvotes(snapshot, min_upvotes=min_upvotes, inclusive=True)
+
+    setattr(service_module, "DEFAULT_TIMEOUT_SECONDS", PDF_DOWNLOAD_TIMEOUT_SECONDS)
 
     day_dir = service_module.day_directory(data_dir, target_date)
     pdf_dir = day_dir / service_module.PDF_SUBDIR_NAME
@@ -134,7 +141,18 @@ def _collect_date(data_dir: Path, target_date: date, *, min_upvotes: int, run_re
     existing_count = 0
     failed_count = 0
     for paper in filtered:
-        download_result = service_module.ensure_pdf_downloaded(pdf_dir, paper)
+        try:
+            download_result = _ensure_pdf_downloaded_bounded(service_module, pdf_dir, paper)
+        except Exception as exc:  # pragma: no cover - depends on network behavior
+            pdf_file_name = f"{paper.paper_id}.pdf"
+            (pdf_dir / pdf_file_name).unlink(missing_ok=True)
+            download_result = service_module.DownloadResult(
+                pdf_url=service_module.ARXIV_PDF_URLS[0].format(paper_id=paper.paper_id),
+                pdf_rel_path=None,
+                pdf_file_name=pdf_file_name,
+                downloaded=False,
+                error=str(exc),
+            )
         if download_result.downloaded:
             if download_result.error == "already_exists":
                 existing_count += 1
@@ -202,6 +220,100 @@ def _collect_date(data_dir: Path, target_date: date, *, min_upvotes: int, run_re
         pdf_failed=failed_count,
     )
     return manifest_path
+
+
+def _ensure_pdf_downloaded_bounded(service_module: Any, pdf_dir: Path, paper: Any) -> Any:
+    pdf_file_name = f"{paper.paper_id}.pdf"
+    destination = pdf_dir / pdf_file_name
+    if destination.exists() and destination.stat().st_size > 0:
+        if _looks_like_complete_pdf(destination):
+            return service_module.DownloadResult(
+                pdf_url=service_module.ARXIV_PDF_URLS[0].format(paper_id=paper.paper_id),
+                pdf_rel_path=f"{service_module.PDF_SUBDIR_NAME}/{pdf_file_name}",
+                pdf_file_name=pdf_file_name,
+                downloaded=True,
+                error="already_exists",
+            )
+        destination.unlink(missing_ok=True)
+
+    if shutil.which("curl") is None:
+        return service_module.ensure_pdf_downloaded(pdf_dir, paper)
+
+    last_error: str | None = None
+    for template in service_module.ARXIV_PDF_URLS:
+        pdf_url = template.format(paper_id=paper.paper_id)
+        temp_destination = destination.with_suffix(destination.suffix + ".tmp")
+        temp_destination.unlink(missing_ok=True)
+        destination.unlink(missing_ok=True)
+        command = [
+            "curl",
+            "--fail",
+            "--location",
+            "--silent",
+            "--show-error",
+            "--connect-timeout",
+            str(PDF_CONNECT_TIMEOUT_SECONDS),
+            "--max-time",
+            str(PDF_DOWNLOAD_TIMEOUT_SECONDS),
+            "--retry",
+            "1",
+            "--user-agent",
+            service_module.DOWNLOAD_USER_AGENT,
+            "--output",
+            str(temp_destination),
+            pdf_url,
+        ]
+        try:
+            pdf_dir.mkdir(parents=True, exist_ok=True)
+            completed = subprocess.run(command, capture_output=True, text=True, timeout=PDF_DOWNLOAD_TIMEOUT_SECONDS + 5)
+        except subprocess.TimeoutExpired as exc:
+            last_error = f"curl timed out for {pdf_url}: {exc}"
+            temp_destination.unlink(missing_ok=True)
+            continue
+        if completed.returncode != 0:
+            stderr = completed.stderr.strip() or completed.stdout.strip() or f"curl exited {completed.returncode}"
+            last_error = f"{stderr} for {pdf_url}"
+            temp_destination.unlink(missing_ok=True)
+            continue
+        if not temp_destination.exists() or temp_destination.stat().st_size <= 0:
+            last_error = f"empty download for {pdf_url}"
+            temp_destination.unlink(missing_ok=True)
+            continue
+        if not _looks_like_complete_pdf(temp_destination):
+            last_error = f"incomplete pdf download for {pdf_url}"
+            temp_destination.unlink(missing_ok=True)
+            continue
+        temp_destination.replace(destination)
+        return service_module.DownloadResult(
+            pdf_url=pdf_url,
+            pdf_rel_path=f"{service_module.PDF_SUBDIR_NAME}/{pdf_file_name}",
+            pdf_file_name=pdf_file_name,
+            downloaded=True,
+        )
+
+    return service_module.DownloadResult(
+        pdf_url=service_module.ARXIV_PDF_URLS[0].format(paper_id=paper.paper_id),
+        pdf_rel_path=None,
+        pdf_file_name=pdf_file_name,
+        downloaded=False,
+        error=last_error or "unknown download failure",
+    )
+
+
+def _looks_like_complete_pdf(path: Path) -> bool:
+    try:
+        size = path.stat().st_size
+        if size <= 0:
+            return False
+        with path.open("rb") as handle:
+            header = handle.read(5)
+            if header != b"%PDF-":
+                return False
+            handle.seek(max(0, size - 1024 * 1024))
+            tail = handle.read()
+            return b"%%EOF" in tail
+    except OSError:
+        return False
 
 
 def _ensure_source_package_on_path(base_dir: Path) -> None:
